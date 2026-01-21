@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-run_benchmarks.py - Cross-platform benchmark runner for bfsree
+run_benchmarks.py - Cross-platform benchmark runner for bffsree
 Works on Linux, macOS, and Windows
 """
 
@@ -15,9 +15,9 @@ BENCH_DIR = os.path.join(SCRIPT_DIR, "BFBench-1.4")
 
 # Determine executable name based on platform
 if platform.system() == "Windows":
-    BFSREE = os.path.join(SCRIPT_DIR, "bfsree.exe")
+    BFFSREE = os.path.join(SCRIPT_DIR, "bffsree.exe")
 else:
-    BFSREE = os.path.join(SCRIPT_DIR, "bfsree")
+    BFFSREE = os.path.join(SCRIPT_DIR, "bffsree")
 
 # ANSI colors (disabled on Windows unless using Windows Terminal)
 USE_COLOR = sys.stdout.isatty() and (platform.system() != "Windows" or "WT_SESSION" in os.environ)
@@ -27,15 +27,15 @@ YELLOW = "\033[1;33m" if USE_COLOR else ""
 NC = "\033[0m" if USE_COLOR else ""
 
 def build_if_needed(force=False):
-    """Build bfsree if executable doesn't exist or force is True"""
-    if force or not os.path.exists(BFSREE):
-        print("Building bfsree...")
+    """Build bffsree if executable doesn't exist or force is True"""
+    if force or not os.path.exists(BFFSREE):
+        print("Building bffsree...")
         if platform.system() == "Windows":
             # Try make first, fall back to direct gcc
             try:
                 subprocess.run(["make", "release"], cwd=SCRIPT_DIR, check=True)
             except FileNotFoundError:
-                subprocess.run(["gcc", "-Wall", "-O3", "-o", "bfsree.exe", "main.c"], 
+                subprocess.run(["gcc", "-Wall", "-O3", "-o", "bffsree.exe", "main.c"], 
                              cwd=SCRIPT_DIR, check=True)
         else:
             subprocess.run(["make", "release"], cwd=SCRIPT_DIR, check=True)
@@ -51,7 +51,7 @@ def run_benchmark(name, bfile, input_data="", expected_output=None, expected_fil
     try:
         # Use binary mode for subprocess to handle all outputs
         result = subprocess.run(
-            [BFSREE, bf_path],
+            [BFFSREE, bf_path],
             input=input_data.encode() if input_data else None,
             capture_output=True,
             timeout=300
@@ -118,14 +118,14 @@ def main():
     force_build = "-b" in sys.argv or "--build" in sys.argv
     
     print("==============================================")
-    print("         bfsree Benchmark Suite")
+    print("         bffsree Benchmark Suite")
     print("==============================================")
     print()
     
     build_if_needed(force_build)
     
-    if not os.path.exists(BFSREE):
-        print(f"{RED}Error: bfsree executable not found{NC}")
+    if not os.path.exists(BFFSREE):
+        print(f"{RED}Error: bffsree executable not found{NC}")
         sys.exit(1)
     
     print("Running benchmarks...")

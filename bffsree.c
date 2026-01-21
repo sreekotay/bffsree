@@ -1,10 +1,10 @@
 // =====================================================================
-// bfsree.c
+// bffsree.c
 // =====================================================================
-#ifdef BFSREE_IMPLEMENTATION
+#ifdef BFFSREE_IMPLEMENTATION
 
 #define _CRT_SECURE_NO_WARNINGS
-#include "bfsree.h"
+#include "bffsree.h"
 
 #ifndef _refInterp
 #define _refInterp 0
@@ -13,7 +13,7 @@
 // =====================================================================
 // main VM loop for bfi
 // =====================================================================
-int bfsree_Eval(bf_VM* vm, char* inp, int ocount) {
+int bffsree_Eval(bf_VM* vm, char* inp, int ocount) {
     bf_cell* ptr = vm->tape;
     bf_op* bfo   = (bf_op*)vm->prog_op;
     int ptrLen = vm->tapeLen;
@@ -140,7 +140,7 @@ static int bf_readfile(char** data, FILE* fh) {
 // =====================================================================
 // main
 // =====================================================================
-int bfsree_Main(int argc, char* argv[]) {
+int bffsree_Main(int argc, char* argv[]) {
     int carg = 1, proglen, printBF = 0, i;
     int ci = 0, c, ps = 0, psh = 0, lc = 0, metric = 0;
     char *prog = 0, *inp = 0;
@@ -216,11 +216,11 @@ int bfsree_Main(int argc, char* argv[]) {
     vm.progLen    = proglen;
     vm.progHelper = progHelp;
     vm.progLen_op = bf_Optimize(&vm.prog_op, vm.prog, vm.progLen, metric);
-    if (printBF == 2)        bfsree_Print(&vm, inp, 0);
-    else if (printBF == 1)   bfsree_Print(&vm, inp, 1);
+    if (printBF == 2)        bffsree_Print(&vm, inp, 0);
+    else if (printBF == 1)   bffsree_Print(&vm, inp, 1);
     else {
         carg = 0;
-        do { carg += bfsree_Eval(&vm, inp, 10000); } while (vm.pc > 0);
+        do { carg += bffsree_Eval(&vm, inp, 10000); } while (vm.pc > 0);
         if (carg != 1) printf("//instructions: [%d]\n", carg);
     }
     bf_VM_free(&vm);
@@ -230,4 +230,4 @@ int bfsree_Main(int argc, char* argv[]) {
     return 0;
 }
 
-#endif // BFSREE_IMPLEMENTATION
+#endif // BFFSREE_IMPLEMENTATION

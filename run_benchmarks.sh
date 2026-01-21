@@ -1,13 +1,13 @@
 #!/bin/bash
 # =====================================================================
-# run_benchmarks.sh - Run all brainfuck benchmarks with bfsree
+# run_benchmarks.sh - Run all brainfuck benchmarks with bffsree
 # =====================================================================
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BENCH_DIR="$SCRIPT_DIR/BFBench-1.4"
-BFSREE="$SCRIPT_DIR/bfsree"
+BFFSREE="$SCRIPT_DIR/bffsree"
 
 # Colors for output
 RED='\033[0;31m'
@@ -16,20 +16,20 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 echo "=============================================="
-echo "         bfsree Benchmark Suite"
+echo "         bffsree Benchmark Suite"
 echo "=============================================="
 echo
 
 # Build if needed
-if [ ! -f "$BFSREE" ] || [ "$1" = "-b" ] || [ "$1" = "--build" ]; then
-    echo "Building bfsree..."
+if [ ! -f "$BFFSREE" ] || [ "$1" = "-b" ] || [ "$1" = "--build" ]; then
+    echo "Building bffsree..."
     make -C "$SCRIPT_DIR" release
     echo
 fi
 
 # Check if executable exists
-if [ ! -f "$BFSREE" ]; then
-    echo -e "${RED}Error: bfsree executable not found${NC}"
+if [ ! -f "$BFFSREE" ]; then
+    echo -e "${RED}Error: bffsree executable not found${NC}"
     exit 1
 fi
 
@@ -47,9 +47,9 @@ run_benchmark() {
     
     local tmpfile=$(mktemp)
     if [ -n "$input" ]; then
-        echo -n "$input" | "$BFSREE" "$BENCH_DIR/$bfile" 2>/dev/null | grep -v '^//' > "$tmpfile" || true
+        echo -n "$input" | "$BFFSREE" "$BENCH_DIR/$bfile" 2>/dev/null | grep -v '^//' > "$tmpfile" || true
     else
-        "$BFSREE" "$BENCH_DIR/$bfile" 2>/dev/null | grep -v '^//' > "$tmpfile" || true
+        "$BFFSREE" "$BENCH_DIR/$bfile" 2>/dev/null | grep -v '^//' > "$tmpfile" || true
     fi
     
     local end_time=$(python3 -c 'import time; print(time.time())')
@@ -87,7 +87,7 @@ run_benchmark_file() {
     
     local tmpfile=$(mktemp)
     local expectedfile=$(mktemp)
-    "$BFSREE" "$BENCH_DIR/$bfile" 2>/dev/null | grep -v '^//' | LC_ALL=C tr -d '\r' > "$tmpfile" || true
+    "$BFFSREE" "$BENCH_DIR/$bfile" 2>/dev/null | grep -v '^//' | LC_ALL=C tr -d '\r' > "$tmpfile" || true
     LC_ALL=C tr -d '\r' < "$BENCH_DIR/$outfile" > "$expectedfile"
     
     local end_time=$(python3 -c 'import time; print(time.time())')

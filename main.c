@@ -1,18 +1,19 @@
 // =====================================================================
 // main.c - Entry point for bffsree Brainfuck interpreter
+// (bffsree = BrainFuck For Sree)
 // =====================================================================
 
-#define BFSREE_IMPLEMENTATION
-#define BFSREE_OPT_IMPLEMENTATION
+#define BFFSREE_IMPLEMENTATION
+#define BFFSREE_OPT_IMPLEMENTATION
 
-#include "bfsree.h"
-#include "bfsree.c"
-#include "bfsree-opt.c"
+#include "bffsree.h"
+#include "bffsree.c"
+#include "bffsree-opt.c"
 
 // -----------------------------
-// bfsree_Print - Debug/output helper
+// bffsree_Print - Debug/output helper
 // -----------------------------
-void bfsree_Print(bf_VM* vm, char* inp, int lang) {
+void bffsree_Print(bf_VM* vm, char* inp, int lang) {
     bf_op* bfo = (bf_op*)vm->prog_op;
     int i;
 
@@ -53,5 +54,5 @@ void bfsree_Print(bf_VM* vm, char* inp, int lang) {
 // main
 // -----------------------------
 int main(int argc, char* argv[]) {
-    return bfsree_Main(argc, argv);
+    return bffsree_Main(argc, argv);
 }

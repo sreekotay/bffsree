@@ -20,7 +20,7 @@ endif
 
 # Source files
 SRCS     = main.c
-HEADERS  = bfsree.h bfsree.c bfsree-opt.c
+HEADERS  = bffsree.h bffsree.c bffsree-opt.c
 
 # Build configuration options (override on command line)
 # Example: make CELL_BITS=16 CELL_SIGNED=1

@@ -1,9 +1,9 @@
 // =====================================================================
-// bfsree_opt.c
+// bffsree-opt.c
 // =====================================================================
-#ifdef BFSREE_OPT_IMPLEMENTATION
+#ifdef BFFSREE_OPT_IMPLEMENTATION
 
-#include "bfsree.h"
+#include "bffsree.h"
 
 // optimization macros
 #define _bfe_(e,c)            do { (e).cmd=(uint8_t)(c); } while(0)
@@ -326,4 +326,4 @@ OPT_ERROR:
     return -1;
 }
 
-#endif // BFSREE_OPT_IMPLEMENTATION
+#endif // BFFSREE_OPT_IMPLEMENTATION

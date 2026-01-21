@@ -1,8 +1,8 @@
 // =====================================================================
-// bfsree.h
+// bffsree.h
 // =====================================================================
-#ifndef _BF_SREE_H_
-#define _BF_SREE_H_
+#ifndef _BFF_SREE_H_
+#define _BFF_SREE_H_
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -162,7 +162,10 @@ typedef struct bf_op {
 // VM API (header-only like original)
 // -----------------------------
 static int bf_putc(void* f, int c) { (void)f; return putchar(c); }
-static int bf_getc(void* f)        { return f ? getc((FILE*)f) : getchar(); }
+static int bf_getc(void* f) {
+    int c = f ? getc((FILE*)f) : getchar();
+    return (c == EOF) ? 0 : c;  // Return 0 on EOF (common BF convention)
+}
 
 static int bf_VM_alloc(bf_VM* bp) {
     memset(bp, 0, sizeof(*bp));
@@ -200,11 +203,11 @@ static int bf_VM_tape(bf_VM* bp, int len) {
 // -----------------------------
 // Public API
 // -----------------------------
-int  bfsree_Main(int argc, char* argv[]);
-int  bfsree_Eval(bf_VM* vm, char* inp, int icount);
-void bfsree_Print(bf_VM* vm, char* inp, int lang);
+int  bffsree_Main(int argc, char* argv[]);
+int  bffsree_Eval(bf_VM* vm, char* inp, int icount);
+void bffsree_Print(bf_VM* vm, char* inp, int lang);
 
 int  bf_Optimize(void** bfoptr, char* chars, int proglen, int printMetrics);
 
-#endif // _BF_SREE_H_
+#endif // _BFF_SREE_H_
 
