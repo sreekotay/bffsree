@@ -2,6 +2,8 @@
 
 A fast, optimizing Brainfuck interpreter written in C. Features compile-time optimizations including run-length encoding, loop strength reduction, and multiply-accumulate pattern recognition.
 
+NOTE: LLM was used to generate the benchmark scripts, make files, and this README.md
+
 ## Features
 
 - **Optimizing IR**: Compiles Brainfuck to an intermediate representation with:
