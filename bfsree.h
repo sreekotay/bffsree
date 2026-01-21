@@ -49,16 +49,6 @@
 #endif
 
 #if !BF_CELL_SIGNED && (BF_CELL_BITS == 8 || BF_CELL_BITS == 16 || BF_CELL_BITS == 32 || BF_CELL_BITS == 64)
-  #if BF_CELL_SIGNED
-    typedef int32_t  bf_cell;
-  #else
-    typedef uint32_t bf_cell;
-  #endif
-#else
-  #error "Unsupported BF_CELL_BITS (use 8, 16, or 32)"
-#endif
-
-#if !BF_CELL_SIGNED && (BF_CELL_BITS == 8 || BF_CELL_BITS == 16 || BF_CELL_BITS == 32)
   #define BF_CELL_MOD_POW2 1
 #else
   #define BF_CELL_MOD_POW2 0

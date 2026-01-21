@@ -16,9 +16,11 @@
 int bfsree_Eval(bf_VM* vm, char* inp, int ocount) {
     bf_cell* ptr = vm->tape;
     bf_op* bfo   = (bf_op*)vm->prog_op;
+    int ptrLen = vm->tapeLen;
+#if _refInterp
     char* chars  = vm->prog;
     bf_VM_help* ph = vm->progHelper;
-    int ptrLen = vm->tapeLen;
+#endif
     int pc = vm->pc;
     int sp = vm->sp;
     int c, icount = ocount;
