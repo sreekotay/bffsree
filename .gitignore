@@ -1,6 +1,8 @@
 # Build outputs
 bfsree
 bfsree.exe
+bffsree
+bffsree.exe
 *.o
 *.obj
 *.dSYM/
