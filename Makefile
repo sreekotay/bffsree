@@ -1,5 +1,5 @@
 # =====================================================================
-# Makefile for bfsree - Optimizing Brainfuck Interpreter
+# Makefile for bffsree - Optimizing Brainfuck Interpreter
 # Cross-platform: Linux, macOS, Windows (MinGW/MSYS2)
 # =====================================================================
 
@@ -9,11 +9,11 @@ LDFLAGS  =
 
 # Detect Windows
 ifeq ($(OS),Windows_NT)
-    TARGET   = bfsree.exe
+    TARGET   = bffsree.exe
     RM       = del /f /q 2>nul || true
     PATHSEP  = \\
 else
-    TARGET   = bfsree
+    TARGET   = bffsree
     RM       = rm -f
     PATHSEP  = /
 endif
@@ -53,10 +53,10 @@ ref: $(TARGET)
 # Clean build artifacts
 clean:
 ifeq ($(OS),Windows_NT)
-	-del /f /q bfsree.exe 2>nul
+	-del /f /q bffsree.exe 2>nul
 	-del /f /q *.o 2>nul
 else
-	rm -f bfsree bfsree.exe *.o
+	rm -f bffsree bffsree.exe *.o
 endif
 
 # Run with a test file

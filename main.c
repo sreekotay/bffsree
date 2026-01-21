@@ -1,5 +1,5 @@
 // =====================================================================
-// main.c - Entry point for bfsree Brainfuck interpreter
+// main.c - Entry point for bffsree Brainfuck interpreter
 // =====================================================================
 
 #define BFSREE_IMPLEMENTATION
@@ -24,7 +24,7 @@ void bfsree_Print(bf_VM* vm, char* inp, int lang) {
     }
 
     static const char* op_names[] = {
-        "NOOP", "VAL", "VAL_M", "PUT", "GET", "FWD", "REW",
+        "NOOP", "VAL", "PUT", "GET", "FWD", "REW",
         "PTR_S", "MUL_MUL", "VAL_MZ", "VAL_MUL", "VAL_ZERO", "DEBUG", "EOP"
     };
 
