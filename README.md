@@ -63,24 +63,21 @@ make CELL_BITS=16
 # 8-bit signed cells
 make CELL_SIGNED=1
 
-# 32-bit unsigned cells
-make CELL_BITS=32
-```
 
 ## Usage
 
 ```bash
 # Run a Brainfuck program
-./bfsree program.b
+./bffsree program.b
 
 # Show optimization metrics
-./bfsree -m program.b
+./bffsree -m program.b
 
 # Output optimized IR as C-like dump
-./bfsree -c program.b
+./bffsree -c program.b
 
 # Output optimized IR as JSON
-./bfsree -j program.b
+./bffsree -j program.b
 ```
 
 ### Input Handling
