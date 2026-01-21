@@ -123,7 +123,6 @@ enum {
 enum ebfo_CMD {
     bfo_NOOP = 0,
     bfo_VAL,
-    bfo_VAL_M,
     bfo_PUT,
     bfo_GET,
     bfo_FWD,
