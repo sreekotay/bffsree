@@ -4,7 +4,7 @@
 # =====================================================================
 
 CC       = gcc
-CFLAGS   = -Wall -Wextra -O2
+CFLAGS   = -Wall -Wextra -O3
 LDFLAGS  =
 
 # Detect Windows
@@ -94,9 +94,9 @@ bench: $(TARGET)
 .PHONY: all debug release ref cell16 cell32 clean test metrics bench
 
 # 16-bit cell build
-cell16: CFLAGS = -Wall -Wextra -O2 -DBF_CELL_BITS=16 -DBF_CELL_SIGNED=0 -DBF_OP_BUF_BITS=$(OP_BUF_BITS)
+cell16: CFLAGS = -Wall -Wextra -O3 -DBF_CELL_BITS=16 -DBF_CELL_SIGNED=0 -DBF_OP_BUF_BITS=$(OP_BUF_BITS)
 cell16: $(TARGET)
 
 # 32-bit cell build  
-cell32: CFLAGS = -Wall -Wextra -O2 -DBF_CELL_BITS=32 -DBF_CELL_SIGNED=0 -DBF_OP_BUF_BITS=$(OP_BUF_BITS)
+cell32: CFLAGS = -Wall -Wextra -O3 -DBF_CELL_BITS=32 -DBF_CELL_SIGNED=0 -DBF_OP_BUF_BITS=$(OP_BUF_BITS)
 cell32: $(TARGET)

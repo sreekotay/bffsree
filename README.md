@@ -49,13 +49,10 @@ Benchmarks complete!
 ### Linux / macOS
 
 ```bash
-# Standard build (O2 optimization)
+# Standard build (O3 optimization)
 make
 
-# Release build (O3 optimization)
-make release
-
-# Debug build
+# Debug build (no optimization)
 make debug
 
 # Clean
