@@ -6,7 +6,9 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include "bfsree.h"
 
+#ifndef _refInterp
 #define _refInterp 0
+#endif
 
 // =====================================================================
 // main VM loop for bfi
