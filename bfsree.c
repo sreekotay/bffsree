@@ -72,7 +72,7 @@ DONE:
         c = bfo->cmd;
         switch (c) {
         case bfo_NOOP:      /*nothing*/                                     break;
-        case bfo_VAL:       ptr[sp] += (char)bfo->val;                      break;
+        case bfo_VAL:       ptr[sp] += (bf_cell)bfo->val;                      break;
         case bfo_PUT:       vm->putcp(vm->putdata, ptr[sp]);                break;
         case bfo_GET:       ptr[sp] = (inp && *inp) ? (bf_cell)*inp++ : (bf_cell)vm->getcp(vm->getdata); break;
         case bfo_FWD:       if (ptr[sp] == 0) bfo += bfo->val;

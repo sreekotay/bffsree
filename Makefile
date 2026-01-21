@@ -91,4 +91,12 @@ endif
 bench: $(TARGET)
 	python3 run_benchmarks.py
 
-.PHONY: all debug release ref clean test metrics bench
+.PHONY: all debug release ref cell16 cell32 clean test metrics bench
+
+# 16-bit cell build
+cell16: CFLAGS = -Wall -Wextra -O2 -DBF_CELL_BITS=16 -DBF_CELL_SIGNED=0 -DBF_OP_BUF_BITS=$(OP_BUF_BITS)
+cell16: $(TARGET)
+
+# 32-bit cell build  
+cell32: CFLAGS = -Wall -Wextra -O2 -DBF_CELL_BITS=32 -DBF_CELL_SIGNED=0 -DBF_OP_BUF_BITS=$(OP_BUF_BITS)
+cell32: $(TARGET)
