@@ -6,6 +6,7 @@ NOTE: LLM was used to generate the benchmark scripts, make files, and this READM
 
 Original article: http://sree.kotay.com/2013/02/implementing-brainfuck.html
 
+```
 ==============================================
          bffsree Benchmark Suite
 ==============================================
@@ -23,6 +24,7 @@ Hanoi                       0.038s  [PASS]
 Simple Benchmark            0.021s  [PASS]
 ----------------------------------------------
 Benchmarks complete!
+```
 
 (results from 2024 Macbook M3)
 
@@ -239,4 +241,5 @@ int main() {
 ## License
 
 Public domain / MIT - use as you wish.
+
 
