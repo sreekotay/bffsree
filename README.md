@@ -1,6 +1,6 @@
 # bffsree - Optimizing Brainfuck Interpreter
 
-A fast, optimizing Brainfuck interpreter written in C. Features compile-time optimizations including run-length encoding, loop strength reduction, and multiply-accumulate pattern recognition.
+A fast, optimizing Brainfuck interpreter written in C. Features parse-time optimizations including run-length encoding, loop strength reduction, and multiply-accumulate pattern recognition.
 
 NOTE: LLM was used to generate the benchmark scripts, make files, and this README.md
 
@@ -241,5 +241,6 @@ int main() {
 ## License
 
 Public domain / MIT - use as you wish.
+
 
 
