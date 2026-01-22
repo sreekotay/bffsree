@@ -6,6 +6,27 @@ NOTE: LLM was used to generate the benchmark scripts, make files, and this READM
 
 Original article: http://sree.kotay.com/2013/02/implementing-brainfuck.html
 
+```
+==============================================
+         bffsree Benchmark Suite
+==============================================
+
+Running benchmarks...
+----------------------------------------------
+Test                           Time  Status
+----------------------------------------------
+Mandelbrot                  1.241s  [PASS]
+Factoring                   0.337s  [PASS]
+Long Run                    0.092s  [PASS]
+Golden Ratio                0.031s  [PASS]
+Hanoi                       0.038s  [PASS]
+99 Bottles of Beer          0.027s  [PASS]
+Simple Benchmark            0.021s  [PASS]
+----------------------------------------------
+Benchmarks complete!
+```
+ALL TESTS RUN ON M3 2024 MACBOOK
+
 ## Features
 
 - **Optimizing IR**: Compiles Brainfuck to an intermediate representation with:
