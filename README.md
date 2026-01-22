@@ -6,6 +6,11 @@ NOTE: LLM was used to generate the benchmark scripts, make files, and this READM
 
 Original article: http://sree.kotay.com/2013/02/implementing-brainfuck.html
 
+Esolang benchmarks:
+https://esolangs.org/wiki/User:David.werecat/BFBench
+https://esolangs.org/wiki/Brainfuck_speed_test
+
+
 ```
 ==============================================
          bffsree Benchmark Suite
