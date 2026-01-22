@@ -162,10 +162,7 @@ typedef struct bf_op {
 // VM API (header-only like original)
 // -----------------------------
 static int bf_putc(void* f, int c) { (void)f; return putchar(c); }
-static int bf_getc(void* f) {
-    int c = f ? getc((FILE*)f) : getchar();
-    return (c == EOF) ? 0 : c;  // Return 0 on EOF (common BF convention)
-}
+static int bf_getc(void* f)        { return f ? getc((FILE*)f) : getchar(); }
 
 static int bf_VM_alloc(bf_VM* bp) {
     memset(bp, 0, sizeof(*bp));
@@ -209,5 +206,5 @@ void bffsree_Print(bf_VM* vm, char* inp, int lang);
 
 int  bf_Optimize(void** bfoptr, char* chars, int proglen, int printMetrics);
 
-#endif // _BFF_SREE_H_
+#endif // _BF_SREE_H_
 

@@ -62,7 +62,6 @@ int bffsree_Eval(bf_VM* vm, char* inp, int ocount) {
 DONE:
     if (pc < 0) {
         vm->pc = -1;
-        vm->putcp(vm->putdata, 10);
         if (ptr && vm->tape == 0) free(ptr);
     } else {
         vm->pc = pc;
@@ -101,12 +100,14 @@ DONE:
         sp += bfo->off;
         bfo++;
         if (_mybounds(sp, ptrLen)) goto ERROR_BF;
-    } while (1 || icount--);
+#if !defined(NDEBUG)
+        if (icount-- <= 0) goto DONE;
+#endif
+    } while (1);
 
 DONE:
     if (bfo == 0) {
         vm->pc = -1;
-        vm->putcp(vm->putdata, 10);
         if (ptr && vm->tape == 0) free(ptr);
     } else {
         vm->pc = (int)(bfo - (bf_op*)vm->prog_op);
