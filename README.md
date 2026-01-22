@@ -210,11 +210,13 @@ bffsree/
 
 ## Embedding
 
-bfsree uses a single-header style. To embed in your project:
+bfsree uses a single-header style. Note you can run it cooperatively (e.g. a limited number of instructions)  
+
+To embed in your project:
 
 ```c
-#define BFSREE_IMPLEMENTATION
-#define BFSREE_OPT_IMPLEMENTATION
+#define BFFSREE_IMPLEMENTATION
+#define BFFSREE_OPT_IMPLEMENTATION
 
 #include "bfsree.h"
 #include "bfsree.c"
