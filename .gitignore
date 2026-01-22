@@ -6,6 +6,7 @@ bffsree.exe
 *.o
 *.obj
 *.dSYM/
+*.out
 
 # Editor/IDE
 .vscode/
