@@ -69,17 +69,13 @@ DONE:
     }
 #else
     bfo += pc;
-    bf_putcharProc putcp = vm->putcp;
-    bf_getcharProc getcp = vm->getcp;
-    void* putdata = vm->putdata;
-    void* getdata = vm->getdata;
     do {
         c = bfo->cmd;
         switch (c) {
         case bfo_NOOP:      /*nothing*/                                     break;
-        case bfo_VAL:       ptr[sp] += (bf_cell)bfo->val;                      break;
-        case bfo_PUT:       putcp(putdata, ptr[sp]);                        break;
-        case bfo_GET:       ptr[sp] = (inp && *inp) ? (bf_cell)*inp++ : (bf_cell)getcp(getdata); break;
+        case bfo_VAL:       ptr[sp] += (bf_cell)bfo->val;                   break;
+        case bfo_PUT:       vm->putcp(vm->putdata, ptr[sp]);                break;
+        case bfo_GET:       ptr[sp] = (inp && *inp) ? (bf_cell)*inp++ : (bf_cell)vm->getcp(vm->getdata); break;
         case bfo_FWD:       if (ptr[sp] == 0) bfo += bfo->val;
                             ptr[sp] += (bf_cell)bfo->buf;
                             break;
@@ -89,29 +85,14 @@ DONE:
         case bfo_PTR_S:     c = bfo->val; tp = ptr + sp; while (*tp) tp += c; sp = (int)(tp - ptr);
                             if (_mybounds(sp, ptrLen)) goto ERROR_BF;
                             break;
-        case bfo_VAL_MZ:    {
-                                bf_cell cur = ptr[sp];
-                                if (cur) {
-                                    ptr[sp + bfo->buf] += (bf_cell)(bfo->val * cur);
-                                }
-                                ptr[sp] = 0;
-                            }
+        case bfo_VAL_MZ:    ptr[sp + bfo->buf] += (bf_cell)(bfo->val * ptr[sp]);
+                            ptr[sp] = 0;
                             break;
-        case bfo_VAL_MUL:   {
-                                bf_cell cur = ptr[sp];
-                                if (cur) {
-                                    ptr[sp + bfo->buf] += (bf_cell)(bfo->val * cur);
-                                }
-                            }
+        case bfo_VAL_MUL:   ptr[sp + bfo->buf] += (bf_cell)(bfo->val * ptr[sp]);
                             break;
         case bfo_VAL_ZERO:  ptr[sp] = (bf_cell)bfo->val;
                             break;
-        case bfo_MUL_MUL:   {
-                                bf_cell cur = ptr[sp];
-                                if (cur) {
-                                    ptr[sp + bfo->buf] *= (bf_cell)(bfo->val * cur);
-                                }
-                            }
+        case bfo_MUL_MUL:   ptr[sp + bfo->buf] *= (bf_cell)(bfo->val * ptr[sp]);
                             break;
         case bfo_EOP:       bfo = 0; goto DONE;
         }
