@@ -36,7 +36,7 @@ ALL TESTS RUN ON M3 2024 MACBOOK
 
 ## Features
 
-- **Optimizing IR**: Compiles Brainfuck to an intermediate representation with:
+- **Optimizing IR**: Parses Brainfuck to an intermediate representation with:
   - Run-length encoding for consecutive `+`, `-`, `<`, `>`
   - Loop strength reduction (`[-]` → zero, `[->+<]` → multiply-add)
   - Scan optimization (`[>]` → pointer scan)
