@@ -220,9 +220,9 @@ int bffsree_Main(int argc, char* argv[]) {
     if (printBF == 2)        bffsree_Print(&vm, inp, 0);
     else if (printBF == 1)   bffsree_Print(&vm, inp, 1);
     else {
-        carg = 0;
-        do { carg += bffsree_Eval(&vm, inp, 10000); } while (vm.pc > 0);
-        if (carg != 1) printf("//instructions: [%d]\n", carg);
+        do {
+            bffsree_Eval(&vm, inp, 10000);
+        } while (vm.pc > 0);
     }
     bf_VM_free(&vm);
 
