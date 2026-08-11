@@ -41,22 +41,31 @@ def build_if_needed(force=False):
             subprocess.run(["make", "release"], cwd=SCRIPT_DIR, check=True)
         print()
 
-def run_benchmark(name, bfile, input_data="", expected_output=None, expected_file=None):
-    """Run a single benchmark and return (elapsed_time, passed)"""
+def run_benchmark(name, bfile, input_data="", expected_output=None, expected_file=None, reps=3):
+    """Run a single benchmark and return (best_elapsed_time, passed)"""
     print(f"{name:25}", end="", flush=True)
-    
+
     bf_path = os.path.join(BENCH_DIR, bfile)
-    
+
     start = time.perf_counter()
     try:
-        # Use binary mode for subprocess to handle all outputs
-        result = subprocess.run(
-            [BFFSREE, bf_path],
-            input=input_data.encode() if input_data else None,
-            capture_output=True,
-            timeout=300
-        )
-        output_bytes = result.stdout
+        # Best-of-N to filter out scheduling/thermal noise; a single
+        # sample can easily be several percent off. Output is taken
+        # from the first run.
+        times = []
+        output_bytes = b""
+        for rep in range(max(1, reps)):
+            t0 = time.perf_counter()
+            # Use binary mode for subprocess to handle all outputs
+            result = subprocess.run(
+                [BFFSREE, bf_path],
+                input=input_data.encode() if input_data else None,
+                capture_output=True,
+                timeout=300
+            )
+            times.append(time.perf_counter() - t0)
+            if rep == 0:
+                output_bytes = result.stdout
     except subprocess.TimeoutExpired:
         elapsed = time.perf_counter() - start
         print(f"{elapsed:8.3f}s  [{RED}TIMEOUT{NC}]")
@@ -65,9 +74,9 @@ def run_benchmark(name, bfile, input_data="", expected_output=None, expected_fil
         elapsed = time.perf_counter() - start
         print(f"{elapsed:8.3f}s  [{RED}ERROR{NC}]")
         return elapsed, False
-    
-    elapsed = time.perf_counter() - start
-    
+
+    elapsed = min(times)
+
     # Try to decode as text, filter // lines
     try:
         output = output_bytes.decode('utf-8', errors='replace')
@@ -116,6 +125,14 @@ def run_benchmark(name, bfile, input_data="", expected_output=None, expected_fil
 
 def main():
     force_build = "-b" in sys.argv or "--build" in sys.argv
+    reps = 3
+    if "-n" in sys.argv:
+        i = sys.argv.index("-n")
+        if i + 1 < len(sys.argv):
+            try:
+                reps = max(1, int(sys.argv[i + 1]))
+            except ValueError:
+                pass
     
     print("==============================================")
     print("         bffsree Benchmark Suite")
@@ -128,13 +145,13 @@ def main():
         print(f"{RED}Error: bffsree executable not found{NC}")
         sys.exit(1)
     
-    print("Running benchmarks...")
+    print(f"Running benchmarks (best of {reps}, use -n N to change)...")
     print("----------------------------------------------")
     print(f"{'Test':25} {'Time':>9}  Status")
     print("----------------------------------------------")
     
     benchmarks = [
-        ("Mandelbrot", "mandelbrot.b", "", None, "mandelbrot.out"),
+        ("Mandelbrot", "mandelbrot.b", "", None, "mandelbrot.result"),
         ("Factoring", "factor.b", "123456789123456789\n", 
          "123456789123456789: 3 3 7 11 13 19 3607 3803 52579\n", None),
         ("Long Run", "long.b", "", None, "long.out"),
@@ -148,7 +165,7 @@ def main():
     all_passed = True
     
     for name, bfile, input_data, expected_output, expected_file in benchmarks:
-        elapsed, passed = run_benchmark(name, bfile, input_data, expected_output, expected_file)
+        elapsed, passed = run_benchmark(name, bfile, input_data, expected_output, expected_file, reps)
         total_time += elapsed
         if not passed:
             all_passed = False

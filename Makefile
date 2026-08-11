@@ -4,7 +4,7 @@
 # =====================================================================
 
 CC       = gcc
-CFLAGS   = -Wall -Wextra -O3
+CFLAGS   = -Wall -Wextra -O3 -DNDEBUG
 LDFLAGS  =
 
 # Detect Windows
@@ -45,6 +45,20 @@ debug: $(TARGET)
 # Release build with maximum optimization
 release: CFLAGS = -Wall -Wextra -O3 -DNDEBUG -DBF_CELL_BITS=$(CELL_BITS) -DBF_CELL_SIGNED=$(CELL_SIGNED) -DBF_OP_BUF_BITS=$(OP_BUF_BITS)
 release: $(TARGET)
+
+# Fast build: drops the per-dispatch bounds check (tape sentinel pads
+# keep every access inside the allocation; safety parity with bf-cpp,
+# which never checks) and uses native codegen. Benchmark build; the
+# default stays fully checked. If you want to chase the last few
+# percent, standard gcc PGO (-fprofile-generate / -fprofile-use) on
+# top of these flags adds ~0-5% depending on code layout luck.
+fast: CFLAGS = -Wall -Wextra -O3 -DNDEBUG -DBF_FAST -march=native -DBF_CELL_BITS=$(CELL_BITS) -DBF_CELL_SIGNED=$(CELL_SIGNED) -DBF_OP_BUF_BITS=$(OP_BUF_BITS)
+fast: $(TARGET)
+
+# Profiling build: dumps a dynamic op histogram and the hottest loop
+# sites to stderr after the run
+prof: CFLAGS = -Wall -Wextra -O3 -DNDEBUG -DBF_PROFILE=1 -DBF_CELL_BITS=$(CELL_BITS) -DBF_CELL_SIGNED=$(CELL_SIGNED) -DBF_OP_BUF_BITS=$(OP_BUF_BITS)
+prof: $(TARGET)
 
 # Reference interpreter (non-optimized IR, for comparison)
 ref: CFLAGS = -Wall -Wextra -O3 -DNDEBUG -D_refInterp=1 -DBF_CELL_BITS=$(CELL_BITS) -DBF_CELL_SIGNED=$(CELL_SIGNED) -DBF_OP_BUF_BITS=$(OP_BUF_BITS)
@@ -91,7 +105,7 @@ endif
 bench: $(TARGET)
 	python3 run_benchmarks.py
 
-.PHONY: all debug release ref cell16 cell32 clean test metrics bench
+.PHONY: all debug release ref prof fast cell16 cell32 clean test metrics bench
 
 # 16-bit cell build
 cell16: CFLAGS = -Wall -Wextra -O3 -DBF_CELL_BITS=16 -DBF_CELL_SIGNED=0 -DBF_OP_BUF_BITS=$(OP_BUF_BITS)

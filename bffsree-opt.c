@@ -39,7 +39,6 @@ static int optimizeLoop(bf_op* bfo, int s) {
     bf_op *opptr, opstack[128];
     char vtrackspace[512] = {0};
     char *vtrack = vtrackspace + 256;
-    int minsp, maxsp;
 
     // ============================
     // Can we optimize this loop?
@@ -53,10 +52,9 @@ static int optimizeLoop(bf_op* bfo, int s) {
 
     // read = 1, modify = 2, set = 4
     #define _loop_var(a) (((a) & 7) > 2)  // once modified, we can't read safely
-    minsp = maxsp = sp;
+    #define _vt_bad(i)   ((i) < -255 || (i) > 255)  // outside vtrack window
     while (canopt && (cmd = (enum ebfo_CMD)bfo[pc].cmd) != bfo_REW) {
-        if (sp > maxsp) maxsp = sp;
-        if (sp < minsp) minsp = sp;
+        if (_vt_bad(sp)) { canopt = 0; break; }
         switch (cmd) {
         case bfo_VAL:
             if (sp == 0) lc += bfo[pc].val;
@@ -64,6 +62,7 @@ static int optimizeLoop(bf_op* bfo, int s) {
             break;
 
         case bfo_VAL_MUL:
+            if (_vt_bad(sp + bfo[pc].buf)) { canopt = 0; break; }
             if (_loop_var(vtrack[sp])) canopt = 0;
             if (_loop_var(vtrack[sp + bfo[pc].buf])) canopt = 0;
             vtrack[sp + bfo[pc].buf] |= 2 | 1;
@@ -72,6 +71,7 @@ static int optimizeLoop(bf_op* bfo, int s) {
             break;
 
         case bfo_VAL_MZ:
+            if (_vt_bad(sp + bfo[pc].buf)) { canopt = 0; break; }
             if (_loop_var(vtrack[sp + bfo[pc].buf])) canopt = 0;
             // fall through
 
@@ -109,7 +109,7 @@ static int optimizeLoop(bf_op* bfo, int s) {
     // Optimize the loop
     // ============================
     rc = (int)(sizeof(*opptr) * (size_t)(pc - s + 1));
-    opptr = (rc <= (int)(sizeof(*opptr) * sizeof(opstack))) ? opstack : (bf_op*)malloc((size_t)rc);
+    opptr = (rc <= (int)sizeof(opstack)) ? opstack : (bf_op*)malloc((size_t)rc);
     memcpy(opptr, bfo + s, (size_t)rc);
 
     // first - open
@@ -208,6 +208,80 @@ static int optimizeLoop(bf_op* bfo, int s) {
     if (opptr != opstack) free(opptr);
     return pc;
     #undef _loop_var
+    #undef _vt_bad
+}
+
+// ----------------------------
+// Peephole: fold NOOP pointer moves into the preceding op.
+// Safe because jumps only target FWD/REW ops (never NOOPs) and an
+// op's off applies only on its fall-through path. Jump distances
+// (val) are renumbered for the deleted slots. Returns the new length.
+// ----------------------------
+static int bf_foldNoops(bf_op* bfo, int pc) {
+    int*  nidx = (int*)malloc(sizeof(int) * (size_t)(pc + 1));
+    char* del  = (char*)malloc((size_t)(pc + 1));
+    int i, w, acc = 0;
+
+    if (nidx && del) {
+        // pass 1: mark deletable NOOPs and assign new indices.
+        // acc tracks the fold target's accumulated off so the
+        // result is guaranteed to fit bf_off_t.
+        for (i = 0, w = 0; i < pc; i++) {
+            nidx[i] = w;
+            if (bfo[i].cmd == bfo_NOOP && w > 0 &&
+                acc + bfo[i].off >= -32768 && acc + bfo[i].off <= 32767) {
+                del[i] = 1;
+                acc += bfo[i].off;
+                continue;
+            }
+            del[i] = 0;
+            acc = bfo[i].off;
+            w++;
+        }
+        nidx[pc] = w;
+
+        // pass 2: renumber jump distances against new indices
+        for (i = 0; i < pc; i++) {
+            if (bfo[i].cmd == bfo_FWD || bfo[i].cmd == bfo_REW)
+                bfo[i].val = nidx[i + bfo[i].val] - nidx[i];
+        }
+
+        // pass 3: compact, folding each deleted NOOP's off backward
+        for (i = 0, w = 0; i < pc; i++) {
+            if (del[i]) {
+                bfo[w - 1].off = (bf_off_t)(bfo[w - 1].off + bfo[i].off);
+                continue;
+            }
+            bfo[w++] = bfo[i];
+        }
+        pc = w;
+    }
+    _myfree(nidx);
+    _myfree(del);
+    return pc;
+}
+
+// ----------------------------
+// Convert remaining walking loops whose bodies are straight-line
+// arithmetic into LOOPRUN superinstructions. Must run after
+// bf_foldNoops so FWD jump distances are final. Body and REW ops stay
+// in place as the parameter block.
+// ----------------------------
+static void bf_markLoopRuns(bf_op* bfo, int pc) {
+    int i, j, n, c, okb;
+
+    for (i = 0; i < pc; i++) {
+        if (bfo[i].cmd != bfo_FWD) continue;
+        n = bfo[i].val;
+        if (n < 2 || i + n >= pc || bfo[i + n].cmd != bfo_REW) continue;
+        okb = 1;
+        for (j = i + 1; j < i + n; j++) {
+            c = bfo[j].cmd;
+            if (c != bfo_VAL && c != bfo_VAL_MZ && c != bfo_VAL_MUL &&
+                c != bfo_VAL_ZERO && c != bfo_MUL_MUL) { okb = 0; break; }
+        }
+        if (okb) bfo[i].cmd = bfo_LOOPRUN;
+    }
 }
 
 // ----------------------------
@@ -216,10 +290,9 @@ static int optimizeLoop(bf_op* bfo, int s) {
 int bf_Optimize(void** bfoptr, char* chars, int proglen, int printMetrics) {
     bf_op* bfo = (bf_op*)malloc(sizeof(bf_op) * (size_t)(proglen + 1));
     int lstack[bf_MEMDEFAULT];
-    int sstack[bf_MEMDEFAULT];
 
     int pc = 0, rpc = 0;
-    int cci = 0, sp = 0, c;
+    int cci = 0, c;
     int loop = 0, l;
     int off = 0, t1 = 0, tc;
 
@@ -234,19 +307,16 @@ int bf_Optimize(void** bfoptr, char* chars, int proglen, int printMetrics) {
                 rpc = tc + 1;
                 rpc = ptrcounter(&off, chars, rpc, proglen);
                 _bfe_vo(bfo[pc], bfo_PTR_S, t1, off);
-                sp += off;
                 pc++;
                 break;
             }
 
-            sstack[loop] = sp;
-            sp = 0;
+            if (loop >= bf_MEMDEFAULT) goto OPT_ERROR;  // nesting too deep
             lstack[loop++] = pc;
 
             rpc = valcounter(&cci, chars, rpc, proglen);
             rpc = ptrcounter(&off, chars, rpc, proglen);
             _bfe_vob(bfo[pc], bfo_FWD, pc, off, cci);
-            sp += off;
             pc++;
             break;
 
@@ -254,18 +324,24 @@ int bf_Optimize(void** bfoptr, char* chars, int proglen, int printMetrics) {
             if (loop <= 0) goto OPT_ERROR;
 
             l = lstack[--loop];
-            sp = sstack[loop];
 
             rpc = valcounter(&cci, chars, rpc, proglen);
             rpc = ptrcounter(&off, chars, rpc, proglen);
 
             _bfe_v(bfo[l], bfo_FWD, pc - l);
             _bfe_vob(bfo[pc], bfo_REW, l - pc, off, cci);
-            sp += off;
             pc++;
 
             tc = optimizeLoop(bfo, l);
             if (tc > 0) pc = tc;
+            else if (pc == l + 3) {
+                // Walking loop with a one-op body (net pointer drift per
+                // iteration, so not flattenable): execute it as a single
+                // op with an internal loop. The FWD keeps its slot and
+                // the body/REW ops become its parameter block.
+                if (bfo[l + 1].cmd == bfo_VAL_MZ)   bfo[l].cmd = bfo_MZSCAN;
+                else if (bfo[l + 1].cmd == bfo_VAL) bfo[l].cmd = bfo_VALSCAN;
+            }
             break;
 
         case bf_GT:
@@ -273,7 +349,6 @@ int bf_Optimize(void** bfoptr, char* chars, int proglen, int printMetrics) {
             rpc = ptrcounter(&off, chars, rpc, proglen);
             off += (c == bf_GT) ? 1 : -1;
             _bfe_vo(bfo[pc], bfo_NOOP, 0, off);
-            sp += off;
             pc++;
             break;
 
@@ -283,21 +358,18 @@ int bf_Optimize(void** bfoptr, char* chars, int proglen, int printMetrics) {
             cci += (c == bf_PLUS) ? 1 : -1;
             rpc = ptrcounter(&off, chars, rpc, proglen);
             _bfe_vo(bfo[pc], (cci == 0) ? bfo_NOOP : bfo_VAL, cci, off);
-            sp += off;
             pc++;
             break;
 
         case bf_PERIOD:
             rpc = ptrcounter(&off, chars, rpc, proglen);
             _bfe_vo(bfo[pc], bfo_PUT, bfo[pc].val, off);
-            sp += off;
             pc++;
             break;
 
         case bf_COMMA:
             rpc = ptrcounter(&off, chars, rpc, proglen);
             _bfe_vo(bfo[pc], bfo_GET, bfo[pc].val, off);
-            sp += off;
             pc++;
             break;
 
@@ -307,6 +379,11 @@ int bf_Optimize(void** bfoptr, char* chars, int proglen, int printMetrics) {
 
         rpc++;
     }
+
+    if (loop != 0) goto OPT_ERROR;  // unmatched '['
+
+    pc = bf_foldNoops(bfo, pc);
+    bf_markLoopRuns(bfo, pc);
 
     if (printMetrics) {
         printf("//-- Optimization: Instructions [%d -> %d] using Bytes [%d -> %d] (op=%d bytes)\n",
@@ -321,7 +398,7 @@ int bf_Optimize(void** bfoptr, char* chars, int proglen, int printMetrics) {
     return pc;
 
 OPT_ERROR:
-    printf("OPT_ERROR --- unbalanced '['\n");
+    printf("// error - unbalanced braces or nesting too deep\n");
     free(bfo);
     return -1;
 }

@@ -48,12 +48,6 @@
   #error "Unsupported BF_CELL_BITS (use 8, 16, 32, or 64)"
 #endif
 
-#if !BF_CELL_SIGNED && (BF_CELL_BITS == 8 || BF_CELL_BITS == 16 || BF_CELL_BITS == 32 || BF_CELL_BITS == 64)
-  #define BF_CELL_MOD_POW2 1
-#else
-  #define BF_CELL_MOD_POW2 0
-#endif
-
 // IR argument width for bf_op.buf (NOT a tape cell).
 #ifndef BF_OP_BUF_BITS
 #define BF_OP_BUF_BITS 16
@@ -71,9 +65,23 @@
 
 typedef int16_t bf_off_t;
 
-// Max scan distance when searching for matching REW during optimization.
-#ifndef BF_OPT_LOOP_RUNAWAY
-#define BF_OPT_LOOP_RUNAWAY 65536
+// Profiling build (-DBF_PROFILE=1, or `make prof`): counts executions
+// per IR op (iterations for loop-carrying ops) and dumps a dynamic op
+// histogram plus the hottest loop sites to stderr after the run.
+// Costs a counter increment per dispatch, so it is off by default.
+#ifndef BF_PROFILE
+#define BF_PROFILE 0
+#endif
+
+// Threaded (computed-goto) dispatch: on by default for GCC/Clang, which
+// support labels-as-values. MSVC and others fall back to switch dispatch.
+// Override with -DBF_USE_CGOTO=0/1.
+#ifndef BF_USE_CGOTO
+  #if defined(__GNUC__)
+    #define BF_USE_CGOTO 1
+  #else
+    #define BF_USE_CGOTO 0
+  #endif
 #endif
 
 typedef int (*bf_putcharProc)(void* data, int ch);
@@ -101,7 +109,9 @@ typedef struct bf_VM {
     void*   prog_op;
     int     progLen_op;
 
-    void*   debugProg;
+#if BF_PROFILE
+    unsigned long long* prof;   // per-IR-op execution counts
+#endif
 } bf_VM;
 
 // -----------------------------
@@ -119,27 +129,24 @@ enum {
     bf_COMMA  = ',',
     bf_OPEN   = '[',
     bf_CLOSE  = ']',
-    bf_DEBUG  = '#',
     bf_EOP    = 'e',
 };
 
 // -----------------------------
 // IR
 // -----------------------------
+// The op set, defined once and expanded everywhere it is needed:
+// the enum here, both dispatch tables and the label array in
+// bffsree.c, and the printable names in main.c. Order is the enum
+// order; add ops here and give them an _op_* body in bffsree.c.
+#define BF_OP_LIST(X) \
+    X(NOOP) X(VAL) X(PUT) X(GET) X(FWD) X(REW) X(PTR_S) X(MUL_MUL) \
+    X(VAL_MZ) X(VAL_MUL) X(VAL_ZERO) X(MZSCAN) X(VALSCAN) X(LOOPRUN) X(EOP)
+
 enum ebfo_CMD {
-    bfo_NOOP = 0,
-    bfo_VAL,
-    bfo_PUT,
-    bfo_GET,
-    bfo_FWD,
-    bfo_REW,
-    bfo_PTR_S,
-    bfo_MUL_MUL,
-    bfo_VAL_MZ,
-    bfo_VAL_MUL,
-    bfo_VAL_ZERO,
-    bfo_DEBUG,
-    bfo_EOP,
+#define X(n) bfo_##n,
+    BF_OP_LIST(X)
+#undef X
     bfo_Total
 };
 
@@ -153,9 +160,10 @@ typedef struct bf_op {
 // -----------------------------
 // Helpers/macros
 // -----------------------------
+#define BF_TAPE_PAD 65536
 #define _myfree(a)            do{ if(a){ free(a); (a)=0; } }while(0)
 #define _myabs(a)             (((a)<0)?-(a):(a))
-#define _myresize(a,b,i)      do{ if((i)>(b)){ (b)=((i)>(b))?(i):((b)?(b)*2:64); (a)=(a)?realloc((a),(b)*sizeof(*(a))):malloc((b)*sizeof(*(a))); } }while(0)
+#define _myresize(a,b,i)      do{ if((i)>(b)){ (b)=((b)?(b)*2:64); if((i)>(b)) (b)=(i); (a)=(a)?realloc((a),(b)*sizeof(*(a))):malloc((b)*sizeof(*(a))); } }while(0)
 #define _mybounds(a,b)        ((unsigned long)(a)>=(unsigned long)(b))
 
 // -----------------------------
@@ -173,25 +181,27 @@ static int bf_VM_alloc(bf_VM* bp) {
 
 static int bf_VM_free(bf_VM* bp) {
     _myfree(bp->prog);
-    _myfree(bp->tape);
+    if (bp->tape) { free(bp->tape - BF_TAPE_PAD); bp->tape = 0; }
     _myfree(bp->prog_op);
-    _myfree(bp->debugProg);
     _myfree(bp->progHelper);
+#if BF_PROFILE
+    _myfree(bp->prof);
+#endif
     return 0;
 }
 
 static int bf_VM_tape(bf_VM* bp, int len) {
     if (len) {
         if (bp->tape && bp->tapeLen == len) return 0;
-        bp->tape = bp->tape ? (bf_cell*)realloc(bp->tape, (size_t)len * sizeof(bf_cell))
-                            : (bf_cell*)malloc ((size_t)len * sizeof(bf_cell));
-        if (!bp->tape) return -1;
-        if (len > bp->tapeLen) {
-            memset(bp->tape + bp->tapeLen, 0, (size_t)(len - bp->tapeLen) * sizeof(bf_cell));
+        {   // padded allocation: permanently-zero sentinel zones
+            bf_cell* base = (bf_cell*)calloc((size_t)len + 2u * BF_TAPE_PAD, sizeof(bf_cell));
+            if (!base) return -1;
+            if (bp->tape) free(bp->tape - BF_TAPE_PAD);
+            bp->tape = base + BF_TAPE_PAD;
         }
         bp->tapeLen = len;
     } else {
-        _myfree(bp->tape);
+        if (bp->tape) { free(bp->tape - BF_TAPE_PAD); bp->tape = 0; }
         bp->tapeLen = 0;
     }
     return 0;
@@ -203,6 +213,9 @@ static int bf_VM_tape(bf_VM* bp, int len) {
 int  bffsree_Main(int argc, char* argv[]);
 int  bffsree_Eval(bf_VM* vm, char* inp, int icount);
 void bffsree_Print(bf_VM* vm, char* inp, int lang);
+#if BF_PROFILE
+void bffsree_ProfileReport(bf_VM* vm);
+#endif
 
 int  bf_Optimize(void** bfoptr, char* chars, int proglen, int printMetrics);
 
