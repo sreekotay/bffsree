@@ -262,10 +262,10 @@ static int bf_foldNoops(bf_op* bfo, int pc) {
 }
 
 // ----------------------------
-// Convert remaining walking loops whose bodies are straight-line
-// arithmetic and/or zero-cell scans into LOOPRUN superinstructions.
-// This includes the scan-heavy stack-navigation idioms emitted by go2bf.
-// Must run after
+// Convert remaining walking loops into internal superinstructions.
+// NAVLOOP recognizes the two generated stack-navigation shapes
+//   VAL, PTR_S, PTR_S, VAL, PTR_S [, PTR_S]
+// while LOOPRUN handles straight-line arithmetic. Must run after
 // bf_foldNoops so FWD jump distances are final. Body and REW ops stay
 // in place as the parameter block.
 // ----------------------------
@@ -276,12 +276,21 @@ static void bf_markLoopRuns(bf_op* bfo, int pc) {
         if (bfo[i].cmd != bfo_FWD) continue;
         n = bfo[i].val;
         if (n < 2 || i + n >= pc || bfo[i + n].cmd != bfo_REW) continue;
+        if ((n == 6 || n == 7) &&
+            bfo[i + 1].cmd == bfo_VAL &&
+            bfo[i + 2].cmd == bfo_PTR_S &&
+            bfo[i + 3].cmd == bfo_PTR_S &&
+            bfo[i + 4].cmd == bfo_VAL &&
+            bfo[i + 5].cmd == bfo_PTR_S &&
+            (n == 6 || bfo[i + 6].cmd == bfo_PTR_S)) {
+            bfo[i].cmd = bfo_NAVLOOP;
+            continue;
+        }
         okb = 1;
         for (j = i + 1; j < i + n; j++) {
             c = bfo[j].cmd;
             if (c != bfo_VAL && c != bfo_VAL_MZ && c != bfo_VAL_MUL &&
-                c != bfo_VAL_ZERO && c != bfo_MUL_MUL &&
-                c != bfo_PTR_S) { okb = 0; break; }
+                c != bfo_VAL_ZERO && c != bfo_MUL_MUL) { okb = 0; break; }
         }
         if (okb) bfo[i].cmd = bfo_LOOPRUN;
     }

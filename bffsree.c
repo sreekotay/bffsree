@@ -136,12 +136,10 @@ DONE:
                                             ptr[sp] = 0)
     #define _op_VALSCAN(P)  _op_SCANLOOP(P, ptr[sp] += (bf_cell)(P)[1].val)
 
-    // LOOPRUN: a walking loop whose straight-line arithmetic/scan body
-    // is interpreted internally, reusing the op bodies above (body and
+    // LOOPRUN: a walking loop whose straight-line arithmetic body is
+    // interpreted internally, reusing the op bodies above (body and
     // ']' stay in place; same FWD/REW semantics and sentinel-pad exit
-    // rules as the scans). Internalizing PTR_S-heavy bodies avoids
-    // repeatedly returning to the top-level dispatcher for generated
-    // stack-navigation idioms.
+    // rules as the scans)
     #define _op_LOOPRUN(P) \
         do { \
             bf_op* br = (P) + (P)->val; \
@@ -158,7 +156,6 @@ DONE:
                         case bfo_VAL_MUL:  _op_VAL_MUL(b);  break; \
                         case bfo_VAL_ZERO: _op_VAL_ZERO(b); break; \
                         case bfo_MUL_MUL:  _op_MUL_MUL(b);  break; \
-                        case bfo_PTR_S:    _op_PTR_S(b);    break; \
                         } \
                         sp += b->off; \
                     } \
@@ -171,6 +168,50 @@ DONE:
             } \
             (P) = br; \
             ptr[sp] += (bf_cell)(P)->buf; \
+        } while (0)
+
+    // NAVLOOP: direct execution of go2bf's generated stack-navigation
+    // loops. The body is one of:
+    //   VAL, PTR_S, PTR_S, VAL, PTR_S
+    //   VAL, PTR_S, PTR_S, VAL, PTR_S, PTR_S
+    // Keeping the parameter ops in place preserves jump layout while
+    // avoiding both top-level dispatch and a per-body-op switch.
+#ifdef BF_FAST
+    #define _bf_inner_tail(P) do { sp += (P)->off; } while (0)
+#else
+    #define _bf_inner_tail(P) do { sp += (P)->off; \
+                                    if (_mybounds(sp, ptrLen)) goto ERROR_BF; } while (0)
+#endif
+    #define _op_NAV_STEP(P, I, OP) do { _op_##OP((P) + (I)); \
+                                         _bf_inner_tail((P) + (I)); } while (0)
+    #define _op_NAV_RUN(P, EXTRA) \
+        do { \
+            bf_op* br = (P) + (P)->val; \
+            if (ptr[sp] != 0) { \
+                ptr[sp] += (bf_cell)(P)->buf; \
+                _bf_inner_tail(P); \
+                for (;;) { \
+                    _op_NAV_STEP(P, 1, VAL); \
+                    _op_NAV_STEP(P, 2, PTR_S); \
+                    _op_NAV_STEP(P, 3, PTR_S); \
+                    _op_NAV_STEP(P, 4, VAL); \
+                    _op_NAV_STEP(P, 5, PTR_S); \
+                    EXTRA; \
+                    if (ptr[sp] == 0) break; \
+                    _bf_prof(P); \
+                    ptr[sp] += (bf_cell)(P)->buf; \
+                    _bf_inner_tail(P); \
+                } \
+            } \
+            (P) = br; \
+            ptr[sp] += (bf_cell)(P)->buf; \
+        } while (0)
+    #define _op_NAVLOOP(P) \
+        do { \
+            if ((P)->val == 7) \
+                _op_NAV_RUN(P, _op_NAV_STEP(P, 6, PTR_S)); \
+            else \
+                _op_NAV_RUN(P, (void)0); \
         } while (0)
 
     // Dispatch tail, shared by both arms. BF_FAST drops the per-op
@@ -218,6 +259,9 @@ DONE:
     #undef _bf_tail
     #undef _bf_tick
     #undef _bf_prof
+    #undef _bf_inner_tail
+    #undef _op_NAV_STEP
+    #undef _op_NAV_RUN
 
 DONE:
     if (bfo == 0) {
