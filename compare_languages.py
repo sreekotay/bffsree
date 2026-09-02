@@ -268,7 +268,7 @@ def runtime_versions(runtimes: Sequence[Runtime]) -> dict[str, str]:
                 check=False,
             )
             text = result.stdout.strip().splitlines()
-            if text:
+            if result.returncode == 0 and text:
                 versions[runtime.name] = text[0]
                 break
         else:
@@ -363,6 +363,13 @@ def main() -> int:
                     "max_iterations": 20,
                     "arithmetic": "signed 4-bit fixed point in wrapping bytes",
                 },
+            },
+            "source_revisions": {
+                "plush_article_benchmarks": "maximecb/plush@e83f5515",
+                "brainfuck_generator": (
+                    "itchyny/go2bf@"
+                    "6001981a6834e6cc908888d0089bc18947ea16cb"
+                ),
             },
             "system": {
                 "platform": platform.platform(),

@@ -69,6 +69,13 @@ the relative-throughput baseline when Python is present and records all
 raw samples, runtime versions, build flags, workload parameters, and
 host information in JSON.
 
+Because the scaled workloads finish in milliseconds in the high-level
+runtimes, their figures include a significant amount of process-startup
+time. The bffsree programs take seconds. These results are useful for
+end-to-end execution comparisons, but are not pure VM dispatch rates and
+should not be substituted for the article's exact `fib(38)` and
+depth-14 tree results.
+
 The original Plush `fib` and `binary_tree` sources are from commit
 `e83f5515`; the matched ports intentionally change only the documented
 parameters and binary-tree representation.
