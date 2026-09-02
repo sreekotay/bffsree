@@ -105,14 +105,13 @@ endif
 bench: $(TARGET)
 	python3 run_benchmarks.py
 
-# Compare the same BFBench programs across reference, checked, and fast
-# interpreter tiers (builds isolated binaries under .bench-build).
+# Compare matched programs across available language runtimes and bffsree.
 compare:
-	python3 compare_interpreters.py
+	python3 compare_languages.py
 
 test-compare:
-	python3 -m unittest -v test_compare_interpreters.py
-	python3 compare_interpreters.py -n 1 --warmups 0 --benchmarks hanoi
+	python3 -m unittest -v test_compare_languages.py
+	python3 compare_languages.py -n 1 --warmups 0 --runtimes python bffsree
 
 .PHONY: all debug release ref prof fast cell16 cell32 clean test metrics bench compare test-compare
 

@@ -113,35 +113,34 @@ Standard benchmark programs live in `BFBench-1.4/`
 python run_benchmarks.py   # any platform
 ```
 
-### Comparing interpreter tiers
+### Comparing language interpreters
 
-`compare_interpreters.py` builds isolated `reference`, bounds-checked,
-and `fast` executables, then runs the same five BFBench programs through
-every executable. It checks every result against the canonical output
-before recording its time, so a speedup cannot hide a wrong result.
+`compare_languages.py` extends the comparison from
+[Plush's New Register-Based Interpreter Is Insanely Fast](https://pointersgonewild.com/2026-09-02-plushs-new-register-based-interpreter/)
+with Brainfuck programs run by this repository's `fast` interpreter.
+Matched `fib`, `binary_tree`, and `mandelbrot` programs are provided for
+Plush, Python, Ruby, Lua, and Brainfuck. Every timed result is checked
+against canonical output.
 
-The default protocol follows the methodology described in
-[Plush's New Register-Based Interpreter Is Insanely Fast](https://pointersgonewild.com/2026-09-02-plushs-new-register-based-interpreter/):
-11 interleaved runs, median wall time, and geometric-mean speedups. A
-fixed seed makes the interleaving order reproducible. One untimed warmup
-per executable and workload is included.
+The default protocol uses the article's 11 interleaved runs and median
+wall time. A fixed seed makes the order reproducible. One untimed
+validation/warmup per runtime and workload is included.
 
 ```bash
-make compare
+make compare                 # skips unavailable language runtimes
 
-# Quick smoke comparison and a machine-readable report
-python3 compare_interpreters.py -n 1 --benchmarks hanoi --json results.json
+# Require all five runtimes and save raw samples plus system metadata
+python3 compare_languages.py --require-all --json results.json
 
-# Unit tests plus a one-round, all-tier correctness smoke test
+# Unit tests plus a one-round Python/bffsree correctness comparison
 make test-compare
 ```
 
-The comparison measures complete process wall time, including interpreter
-startup and captured output, equally for every tier. The `fast` tier adds
-`-DBF_FAST -march=native`; all other optimization and cell-size flags are
-identical. Set `CC` to compare with a specific GCC- or Clang-compatible
-compiler. Generated executables are kept in the ignored `.bench-build/`
-directory.
+Set `PLUSH`, `PYTHON`, `RUBY`, or `LUA` to override a runtime command.
+The harness builds bffsree with `-DBF_FAST -march=native` under the
+ignored `.bench-build/` directory. See
+[`comparison/README.md`](comparison/README.md) for workload parameters,
+Brainfuck generation, and fairness limitations.
 
 ## Optimizations
 
