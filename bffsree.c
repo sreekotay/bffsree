@@ -174,6 +174,7 @@ DONE:
     // loops. The body is one of:
     //   VAL, PTR_S, PTR_S, VAL, PTR_S
     //   VAL, PTR_S, PTR_S, VAL, PTR_S, PTR_S
+    //   VAL, PTR_S, VAL, PTR_S, PTR_S
     // Keeping the parameter ops in place preserves jump layout while
     // avoiding both top-level dispatch and a per-body-op switch.
 #ifdef BF_FAST
@@ -184,19 +185,32 @@ DONE:
 #endif
     #define _op_NAV_STEP(P, I, OP) do { _op_##OP((P) + (I)); \
                                          _bf_inner_tail((P) + (I)); } while (0)
-    #define _op_NAV_RUN(P, EXTRA) \
+    #define _op_NAV_BODY_221(P) do { \
+            _op_NAV_STEP(P, 1, VAL); \
+            _op_NAV_STEP(P, 2, PTR_S); \
+            _op_NAV_STEP(P, 3, PTR_S); \
+            _op_NAV_STEP(P, 4, VAL); \
+            _op_NAV_STEP(P, 5, PTR_S); \
+        } while (0)
+    #define _op_NAV_BODY_222(P) do { \
+            _op_NAV_BODY_221(P); \
+            _op_NAV_STEP(P, 6, PTR_S); \
+        } while (0)
+    #define _op_NAV_BODY_122(P) do { \
+            _op_NAV_STEP(P, 1, VAL); \
+            _op_NAV_STEP(P, 2, PTR_S); \
+            _op_NAV_STEP(P, 3, VAL); \
+            _op_NAV_STEP(P, 4, PTR_S); \
+            _op_NAV_STEP(P, 5, PTR_S); \
+        } while (0)
+    #define _op_NAV_RUN(P, BODY) \
         do { \
             bf_op* br = (P) + (P)->val; \
             if (ptr[sp] != 0) { \
                 ptr[sp] += (bf_cell)(P)->buf; \
                 _bf_inner_tail(P); \
                 for (;;) { \
-                    _op_NAV_STEP(P, 1, VAL); \
-                    _op_NAV_STEP(P, 2, PTR_S); \
-                    _op_NAV_STEP(P, 3, PTR_S); \
-                    _op_NAV_STEP(P, 4, VAL); \
-                    _op_NAV_STEP(P, 5, PTR_S); \
-                    EXTRA; \
+                    BODY(P); \
                     if (ptr[sp] == 0) break; \
                     _bf_prof(P); \
                     ptr[sp] += (bf_cell)(P)->buf; \
@@ -209,9 +223,11 @@ DONE:
     #define _op_NAVLOOP(P) \
         do { \
             if ((P)->val == 7) \
-                _op_NAV_RUN(P, _op_NAV_STEP(P, 6, PTR_S)); \
+                _op_NAV_RUN(P, _op_NAV_BODY_222); \
+            else if ((P)[3].cmd == bfo_PTR_S) \
+                _op_NAV_RUN(P, _op_NAV_BODY_221); \
             else \
-                _op_NAV_RUN(P, (void)0); \
+                _op_NAV_RUN(P, _op_NAV_BODY_122); \
         } while (0)
 
     // Dispatch tail, shared by both arms. BF_FAST drops the per-op
@@ -261,6 +277,9 @@ DONE:
     #undef _bf_prof
     #undef _bf_inner_tail
     #undef _op_NAV_STEP
+    #undef _op_NAV_BODY_221
+    #undef _op_NAV_BODY_222
+    #undef _op_NAV_BODY_122
     #undef _op_NAV_RUN
 
 DONE:
