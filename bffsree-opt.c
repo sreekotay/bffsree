@@ -263,7 +263,9 @@ static int bf_foldNoops(bf_op* bfo, int pc) {
 
 // ----------------------------
 // Convert remaining walking loops whose bodies are straight-line
-// arithmetic into LOOPRUN superinstructions. Must run after
+// arithmetic and/or zero-cell scans into LOOPRUN superinstructions.
+// This includes the scan-heavy stack-navigation idioms emitted by go2bf.
+// Must run after
 // bf_foldNoops so FWD jump distances are final. Body and REW ops stay
 // in place as the parameter block.
 // ----------------------------
@@ -278,7 +280,8 @@ static void bf_markLoopRuns(bf_op* bfo, int pc) {
         for (j = i + 1; j < i + n; j++) {
             c = bfo[j].cmd;
             if (c != bfo_VAL && c != bfo_VAL_MZ && c != bfo_VAL_MUL &&
-                c != bfo_VAL_ZERO && c != bfo_MUL_MUL) { okb = 0; break; }
+                c != bfo_VAL_ZERO && c != bfo_MUL_MUL &&
+                c != bfo_PTR_S) { okb = 0; break; }
         }
         if (okb) bfo[i].cmd = bfo_LOOPRUN;
     }

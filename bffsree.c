@@ -136,10 +136,12 @@ DONE:
                                             ptr[sp] = 0)
     #define _op_VALSCAN(P)  _op_SCANLOOP(P, ptr[sp] += (bf_cell)(P)[1].val)
 
-    // LOOPRUN: a walking loop whose straight-line arithmetic body is
-    // interpreted internally, reusing the op bodies above (body and
+    // LOOPRUN: a walking loop whose straight-line arithmetic/scan body
+    // is interpreted internally, reusing the op bodies above (body and
     // ']' stay in place; same FWD/REW semantics and sentinel-pad exit
-    // rules as the scans)
+    // rules as the scans). Internalizing PTR_S-heavy bodies avoids
+    // repeatedly returning to the top-level dispatcher for generated
+    // stack-navigation idioms.
     #define _op_LOOPRUN(P) \
         do { \
             bf_op* br = (P) + (P)->val; \
@@ -156,6 +158,7 @@ DONE:
                         case bfo_VAL_MUL:  _op_VAL_MUL(b);  break; \
                         case bfo_VAL_ZERO: _op_VAL_ZERO(b); break; \
                         case bfo_MUL_MUL:  _op_MUL_MUL(b);  break; \
+                        case bfo_PTR_S:    _op_PTR_S(b);    break; \
                         } \
                         sp += b->off; \
                     } \
