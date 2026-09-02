@@ -277,7 +277,8 @@ static void bf_markLoopRuns(bf_op* bfo, int pc) {
         if (bfo[i].cmd != bfo_FWD) continue;
         n = bfo[i].val;
         if (n < 2 || i + n >= pc || bfo[i + n].cmd != bfo_REW) continue;
-        if (bfo[i + 1].cmd == bfo_VAL &&
+        if ((n == 6 || n == 7) &&
+            bfo[i + 1].cmd == bfo_VAL &&
             bfo[i + 2].cmd == bfo_PTR_S &&
             bfo[i + 5].cmd == bfo_PTR_S &&
             ((n == 7 &&
