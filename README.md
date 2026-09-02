@@ -113,6 +113,36 @@ Standard benchmark programs live in `BFBench-1.4/`
 python run_benchmarks.py   # any platform
 ```
 
+### Comparing interpreter tiers
+
+`compare_interpreters.py` builds isolated `reference`, bounds-checked,
+and `fast` executables, then runs the same five BFBench programs through
+every executable. It checks every result against the canonical output
+before recording its time, so a speedup cannot hide a wrong result.
+
+The default protocol follows the methodology described in
+[Plush's New Register-Based Interpreter Is Insanely Fast](https://pointersgonewild.com/2026-09-02-plushs-new-register-based-interpreter/):
+11 interleaved runs, median wall time, and geometric-mean speedups. A
+fixed seed makes the interleaving order reproducible. One untimed warmup
+per executable and workload is included.
+
+```bash
+make compare
+
+# Quick smoke comparison and a machine-readable report
+python3 compare_interpreters.py -n 1 --benchmarks hanoi --json results.json
+
+# Unit tests plus a one-round, all-tier correctness smoke test
+make test-compare
+```
+
+The comparison measures complete process wall time, including interpreter
+startup and captured output, equally for every tier. The `fast` tier adds
+`-DBF_FAST -march=native`; all other optimization and cell-size flags are
+identical. Set `CC` to compare with a specific GCC- or Clang-compatible
+compiler. Generated executables are kept in the ignored `.bench-build/`
+directory.
+
 ## Optimizations
 
 **Run-length encoding** — consecutive ops merge:

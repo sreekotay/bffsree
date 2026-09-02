@@ -105,7 +105,16 @@ endif
 bench: $(TARGET)
 	python3 run_benchmarks.py
 
-.PHONY: all debug release ref prof fast cell16 cell32 clean test metrics bench
+# Compare the same BFBench programs across reference, checked, and fast
+# interpreter tiers (builds isolated binaries under .bench-build).
+compare:
+	python3 compare_interpreters.py
+
+test-compare:
+	python3 -m unittest -v test_compare_interpreters.py
+	python3 compare_interpreters.py -n 1 --warmups 0 --benchmarks hanoi
+
+.PHONY: all debug release ref prof fast cell16 cell32 clean test metrics bench compare test-compare
 
 # 16-bit cell build
 cell16: CFLAGS = -Wall -Wextra -O3 -DBF_CELL_BITS=16 -DBF_CELL_SIGNED=0 -DBF_OP_BUF_BITS=$(OP_BUF_BITS)
