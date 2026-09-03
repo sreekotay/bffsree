@@ -10,6 +10,95 @@
 #define _refInterp 0
 #endif
 
+#if BF_ZERO_INDEX && !_refInterp
+#if !defined(__GNUC__)
+#error "BF_ZERO_INDEX currently requires GCC or Clang bit-scan builtins"
+#endif
+
+typedef struct bf_zero_index {
+    uint64_t* z3;
+    uint64_t* z8;
+    bf_cell* base;
+    size_t total;
+    size_t n3;
+    size_t n8;
+    size_t words3;
+    size_t words8;
+} bf_zero_index;
+
+static void bf_zero_set(uint64_t* bits, size_t bit, int is_zero) {
+    uint64_t mask = UINT64_C(1) << (bit & 63u);
+    if (is_zero) bits[bit >> 6] |= mask;
+    else         bits[bit >> 6] &= ~mask;
+}
+
+static void bf_zero_update(bf_zero_index* zi, bf_cell* cell) {
+    size_t a;
+    if (!zi->z3) return;
+    a = (size_t)(cell - zi->base);
+    if (a >= zi->total) return;
+    bf_zero_set(zi->z3, (a % 3u) * zi->n3 + a / 3u, *cell == 0);
+    bf_zero_set(zi->z8, (a % 8u) * zi->n8 + a / 8u, *cell == 0);
+}
+
+static int bf_zero_init(bf_zero_index* zi, bf_cell* base, size_t total) {
+    size_t i;
+    memset(zi, 0, sizeof(*zi));
+    zi->base = base;
+    zi->total = total;
+    zi->n3 = (total + 2u) / 3u;
+    zi->n8 = (total + 7u) / 8u;
+    zi->words3 = (3u * zi->n3 + 63u) / 64u;
+    zi->words8 = (8u * zi->n8 + 63u) / 64u;
+    zi->z3 = (uint64_t*)calloc(zi->words3, sizeof(uint64_t));
+    zi->z8 = (uint64_t*)calloc(zi->words8, sizeof(uint64_t));
+    if (!zi->z3 || !zi->z8) {
+        free(zi->z3);
+        free(zi->z8);
+        zi->z3 = zi->z8 = 0;
+        return -1;
+    }
+    for (i = 0; i < total; i++)
+        if (base[i] == 0) bf_zero_update(zi, base + i);
+    return 0;
+}
+
+static void bf_zero_free(bf_zero_index* zi) {
+    free(zi->z3);
+    free(zi->z8);
+    zi->z3 = zi->z8 = 0;
+}
+
+static bf_cell* bf_zero_scan(bf_zero_index* zi, bf_cell* cell, int stride) {
+    uint64_t* bits;
+    uint64_t word;
+    size_t a, r, q, bit, wi, n;
+    int k = stride < 0 ? -stride : stride;
+
+    if (!zi->z3 || (k != 3 && k != 8)) return 0;
+    bits = (k == 3) ? zi->z3 : zi->z8;
+    n = (k == 3) ? zi->n3 : zi->n8;
+    a = (size_t)(cell - zi->base);
+    r = a % (size_t)k;
+    q = a / (size_t)k;
+    bit = r * n + q;
+    wi = bit >> 6;
+
+    if (stride > 0) {
+        word = bits[wi] & (UINT64_MAX << (bit & 63u));
+        while (!word) word = bits[++wi];
+        bit = (wi << 6) + (size_t)__builtin_ctzll(word);
+    } else {
+        word = bits[wi] & (UINT64_MAX >> (63u - (bit & 63u)));
+        while (!word) word = bits[--wi];
+        bit = (wi << 6) + 63u - (size_t)__builtin_clzll(word);
+    }
+
+    q = bit - r * n;
+    return zi->base + r + (size_t)k * q;
+}
+#endif
+
 // =====================================================================
 // main VM loop for bfi
 // =====================================================================
@@ -22,6 +111,9 @@ int bffsree_Eval(bf_VM* vm, char* inp, int ocount) {
 #else
     bf_op* bfo   = (bf_op*)vm->prog_op;
     bf_cell* tp;
+#if BF_ZERO_INDEX
+    bf_zero_index zi;
+#endif
 #endif
     int pc = vm->pc;
     int sp = vm->sp;
@@ -31,6 +123,11 @@ int bffsree_Eval(bf_VM* vm, char* inp, int ocount) {
         if (ptrLen == 0) ptrLen = bf_MAXCELLS;
         ptr = (bf_cell*)calloc((size_t)ptrLen + 2u * BF_TAPE_PAD, sizeof(bf_cell)) + BF_TAPE_PAD;
     }
+
+#if BF_ZERO_INDEX && !_refInterp
+    bf_zero_init(&zi, ptr - BF_TAPE_PAD,
+                 (size_t)ptrLen + 2u * BF_TAPE_PAD);
+#endif
 
 #if _refInterp
     do {
@@ -78,6 +175,31 @@ DONE:
 #else
     #define _bf_tick()  do { } while (0)
 #endif
+#if BF_ZERO_INDEX
+    #define _bf_zupdate(I) bf_zero_update(&zi, ptr + (I))
+#else
+    #define _bf_zupdate(I) do { } while (0)
+#endif
+
+#if BF_ZERO_INDEX
+    #define _bf_scan(P) \
+        do { \
+            c = (P)->val; \
+            tp = bf_zero_scan(&zi, ptr + sp, c); \
+            if (!tp) { tp = ptr + sp; while (*tp) tp += c; } \
+            sp = (int)(tp - ptr); \
+            if (_mybounds(sp, ptrLen)) goto ERROR_BF; \
+        } while (0)
+#else
+    #define _bf_scan(P) \
+        do { \
+            c = (P)->val; \
+            tp = ptr + sp; \
+            while (*tp) tp += c; \
+            sp = (int)(tp - ptr); \
+            if (_mybounds(sp, ptrLen)) goto ERROR_BF; \
+        } while (0)
+#endif
 
     // -----------------------------------------------------------------
     // Op semantics: the single source of truth. P is the op being
@@ -87,22 +209,29 @@ DONE:
     // land on their last parameter slot.
     // -----------------------------------------------------------------
     #define _op_NOOP(P)     do { } while (0)
-    #define _op_VAL(P)      do { ptr[sp] += (bf_cell)(P)->val; } while (0)
+    #define _op_VAL(P)      do { ptr[sp] += (bf_cell)(P)->val; \
+                                 _bf_zupdate(sp); } while (0)
     #define _op_PUT(P)      do { vm->putcp(vm->putdata, ptr[sp]); } while (0)
     #define _op_GET(P)      do { ptr[sp] = (inp && *inp) ? (bf_cell)*inp++ \
-                                         : (bf_cell)vm->getcp(vm->getdata); } while (0)
+                                         : (bf_cell)vm->getcp(vm->getdata); \
+                                 _bf_zupdate(sp); } while (0)
     #define _op_FWD(P)      do { if (ptr[sp] == 0) (P) += (P)->val; \
-                                 ptr[sp] += (bf_cell)(P)->buf; } while (0)
+                                 ptr[sp] += (bf_cell)(P)->buf; \
+                                 _bf_zupdate(sp); } while (0)
     #define _op_REW(P)      do { if (ptr[sp] != 0) (P) += (P)->val; \
-                                 ptr[sp] += (bf_cell)(P)->buf; } while (0)
-    #define _op_PTR_S(P)    do { c = (P)->val; tp = ptr + sp; while (*tp) tp += c; \
-                                 sp = (int)(tp - ptr); \
-                                 if (_mybounds(sp, ptrLen)) goto ERROR_BF; } while (0)
+                                 ptr[sp] += (bf_cell)(P)->buf; \
+                                 _bf_zupdate(sp); } while (0)
+    #define _op_PTR_S(P)    _bf_scan(P)
     #define _op_VAL_MZ(P)   do { ptr[sp + (P)->buf] += (bf_cell)((P)->val * ptr[sp]); \
-                                 ptr[sp] = 0; } while (0)
-    #define _op_VAL_MUL(P)  do { ptr[sp + (P)->buf] += (bf_cell)((P)->val * ptr[sp]); } while (0)
-    #define _op_VAL_ZERO(P) do { ptr[sp] = (bf_cell)(P)->val; } while (0)
-    #define _op_MUL_MUL(P)  do { ptr[sp + (P)->buf] *= (bf_cell)((P)->val * ptr[sp]); } while (0)
+                                 ptr[sp] = 0; \
+                                 _bf_zupdate(sp + (P)->buf); \
+                                 _bf_zupdate(sp); } while (0)
+    #define _op_VAL_MUL(P)  do { ptr[sp + (P)->buf] += (bf_cell)((P)->val * ptr[sp]); \
+                                 _bf_zupdate(sp + (P)->buf); } while (0)
+    #define _op_VAL_ZERO(P) do { ptr[sp] = (bf_cell)(P)->val; \
+                                 _bf_zupdate(sp); } while (0)
+    #define _op_MUL_MUL(P)  do { ptr[sp + (P)->buf] *= (bf_cell)((P)->val * ptr[sp]); \
+                                 _bf_zupdate(sp + (P)->buf); } while (0)
     #define _op_EOP(P)      do { bfo = 0; goto DONE; } while (0)
 
     // MZSCAN/VALSCAN: a walking loop with a one-op body, run as a
@@ -118,6 +247,7 @@ DONE:
         do { \
             if (ptr[sp] != 0) { \
                 ptr[sp] += (bf_cell)(P)->buf; \
+                _bf_zupdate(sp); \
                 sp += (P)->off; \
                 for (;;) { \
                     WORK; \
@@ -125,16 +255,27 @@ DONE:
                     if (ptr[sp] == 0) break; \
                     _bf_prof(P); \
                     ptr[sp] += (bf_cell)(P)->buf; \
+                    _bf_zupdate(sp); \
                     sp += (P)->off; \
                 } \
                 if (_mybounds(sp, ptrLen)) goto ERROR_BF; \
             } \
             (P) += 2; \
             ptr[sp] += (bf_cell)(P)->buf; \
+            _bf_zupdate(sp); \
         } while (0)
-    #define _op_MZSCAN(P)   _op_SCANLOOP(P, ptr[sp + (P)[1].buf] += (bf_cell)((P)[1].val * ptr[sp]); \
-                                            ptr[sp] = 0)
-    #define _op_VALSCAN(P)  _op_SCANLOOP(P, ptr[sp] += (bf_cell)(P)[1].val)
+    #define _op_MZSCAN(P)   _op_SCANLOOP(P, \
+        do { \
+            ptr[sp + (P)[1].buf] += (bf_cell)((P)[1].val * ptr[sp]); \
+            ptr[sp] = 0; \
+            _bf_zupdate(sp + (P)[1].buf); \
+            _bf_zupdate(sp); \
+        } while (0))
+    #define _op_VALSCAN(P)  _op_SCANLOOP(P, \
+        do { \
+            ptr[sp] += (bf_cell)(P)[1].val; \
+            _bf_zupdate(sp); \
+        } while (0))
 
     // LOOPRUN: a walking loop whose straight-line arithmetic body is
     // interpreted internally, reusing the op bodies above (body and
@@ -146,6 +287,7 @@ DONE:
             bf_op* b; \
             if (ptr[sp] != 0) { \
                 ptr[sp] += (bf_cell)(P)->buf; \
+                _bf_zupdate(sp); \
                 sp += (P)->off; \
                 for (;;) { \
                     for (b = (P) + 1; b != br; b++) { \
@@ -163,11 +305,13 @@ DONE:
                     if (ptr[sp] == 0) break; \
                     _bf_prof(P); \
                     ptr[sp] += (bf_cell)(P)->buf; \
+                    _bf_zupdate(sp); \
                     sp += (P)->off; \
                 } \
             } \
             (P) = br; \
             ptr[sp] += (bf_cell)(P)->buf; \
+            _bf_zupdate(sp); \
         } while (0)
 
     // Dispatch tail, shared by both arms. BF_FAST drops the per-op
@@ -215,8 +359,13 @@ DONE:
     #undef _bf_tail
     #undef _bf_tick
     #undef _bf_prof
+    #undef _bf_zupdate
+    #undef _bf_scan
 
 DONE:
+#if BF_ZERO_INDEX
+    bf_zero_free(&zi);
+#endif
     if (bfo == 0) {
         vm->pc = -1;
         if (ptr && vm->tape == 0) free(ptr - BF_TAPE_PAD);

@@ -73,6 +73,13 @@ typedef int16_t bf_off_t;
 #define BF_PROFILE 0
 #endif
 
+// Optional zero-cell indexes for fast strided scans. This trades update
+// overhead and about 48 KiB at the default tape size for O(1)-ish PTR_S
+// queries at the go2bf-dominant strides 3 and 8.
+#ifndef BF_ZERO_INDEX
+#define BF_ZERO_INDEX 0
+#endif
+
 // Threaded (computed-goto) dispatch: on by default for GCC/Clang, which
 // support labels-as-values. MSVC and others fall back to switch dispatch.
 // Override with -DBF_USE_CGOTO=0/1.

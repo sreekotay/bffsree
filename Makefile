@@ -55,6 +55,12 @@ release: $(TARGET)
 fast: CFLAGS = -Wall -Wextra -O3 -DNDEBUG -DBF_FAST -march=native -DBF_CELL_BITS=$(CELL_BITS) -DBF_CELL_SIGNED=$(CELL_SIGNED) -DBF_OP_BUF_BITS=$(OP_BUF_BITS)
 fast: $(TARGET)
 
+# Indexed-scan build: maintains compact zero-cell bitsets for the common
+# stride-3/8 scans emitted by go2bf. This has update overhead, so it stays
+# separate from the general-purpose fast tier.
+indexed: CFLAGS = -Wall -Wextra -O3 -DNDEBUG -DBF_FAST -DBF_ZERO_INDEX=1 -march=native -DBF_CELL_BITS=$(CELL_BITS) -DBF_CELL_SIGNED=$(CELL_SIGNED) -DBF_OP_BUF_BITS=$(OP_BUF_BITS)
+indexed: $(TARGET)
+
 # Profiling build: dumps a dynamic op histogram and the hottest loop
 # sites to stderr after the run
 prof: CFLAGS = -Wall -Wextra -O3 -DNDEBUG -DBF_PROFILE=1 -DBF_CELL_BITS=$(CELL_BITS) -DBF_CELL_SIGNED=$(CELL_SIGNED) -DBF_OP_BUF_BITS=$(OP_BUF_BITS)
@@ -113,7 +119,7 @@ test-compare:
 	python3 -m unittest -v test_compare_languages.py
 	python3 compare_languages.py -n 1 --warmups 0 --runtimes python bffsree
 
-.PHONY: all debug release ref prof fast cell16 cell32 clean test metrics bench compare test-compare
+.PHONY: all debug release ref prof fast indexed cell16 cell32 clean test metrics bench compare test-compare
 
 # 16-bit cell build
 cell16: CFLAGS = -Wall -Wextra -O3 -DBF_CELL_BITS=16 -DBF_CELL_SIGNED=0 -DBF_OP_BUF_BITS=$(OP_BUF_BITS)
