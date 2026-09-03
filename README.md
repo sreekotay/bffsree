@@ -38,6 +38,7 @@ scale — bffsree still beats it on `hanoi`.
   - Run-length encoding for consecutive `+`, `-`, `<`, `>`
   - Loop collapse (`[-]` → zero, `[->+<]` → multiply-add, chained copies → `MUL_MUL`)
   - Scan loops (`[>]`, `[<<]`) → single strided scan op
+  - AVX2 acceleration for the stride-3 scans common in generated BF
   - Walking loops with arithmetic bodies → single-op internal loops
   - Pointer movement fused into every op (`off` field)
 - **Threaded dispatch**: computed-goto on GCC/Clang, switch elsewhere (`-DBF_USE_CGOTO=0/1`)
@@ -160,6 +161,9 @@ Collapsed output is legal analyzer input, so nested loops collapse
 recursively; copies of copies become `MUL_MUL`.
 
 **Scan loops** — `[>]`, `[<<]` etc. become a single strided `PTR_S`.
+On GCC/Clang AVX2 builds with 8-bit cells, stride `+3` and `-3` scans
+test eleven candidate cells per vector load. Other targets and cell
+widths retain the scalar implementation.
 
 **Walking loops** — loops with net pointer drift can't flatten, but
 one-op bodies run as a single op (`MZSCAN`, `VALSCAN`) and straight-line
