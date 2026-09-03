@@ -22,7 +22,9 @@ from typing import Sequence
 ROOT = Path(__file__).resolve().parent
 PROGRAMS = ROOT / "comparison" / "programs"
 BUILD_DIR = ROOT / ".bench-build"
-BFFSREE = BUILD_DIR / ("bffsree-fast.exe" if os.name == "nt" else "bffsree-fast")
+BFFSREE = BUILD_DIR / (
+    "bffsree-indexed.exe" if os.name == "nt" else "bffsree-indexed"
+)
 
 
 @dataclass(frozen=True)
@@ -82,6 +84,7 @@ def build_bffsree() -> list[str]:
         "-O3",
         "-DNDEBUG",
         "-DBF_FAST=1",
+        "-DBF_ZERO_INDEX=1",
         "-march=native",
         "-DBF_CELL_BITS=8",
         "-DBF_CELL_SIGNED=0",
@@ -256,7 +259,7 @@ def runtime_versions(runtimes: Sequence[Runtime]) -> dict[str, str]:
     versions = {}
     for runtime in runtimes:
         if runtime.name == "bffsree":
-            versions[runtime.name] = "local bffsree-fast build"
+            versions[runtime.name] = "local bffsree-indexed build"
             continue
         for flag in ("--version", "-v"):
             result = subprocess.run(

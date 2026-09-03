@@ -150,10 +150,17 @@ enum {
 // the enum here, both dispatch tables and the label array in
 // bffsree.c, and the printable names in main.c. Order is the enum
 // order; add ops here and give them an _op_* body in bffsree.c.
+#if BF_ZERO_INDEX
+#define BF_ZERO_OP_LIST(X) X(PTR_RAW) X(PTR_Z)
+#else
+#define BF_ZERO_OP_LIST(X)
+#endif
+
 #define BF_OP_LIST(X) \
-    X(NOOP) X(VAL) X(PUT) X(GET) X(FWD) X(REW) X(PTR_S) X(PTR_RAW) \
-    X(PTR_Z) X(MUL_MUL) X(VAL_MZ) X(VAL_MUL) X(VAL_ZERO) X(MZSCAN) \
-    X(VALSCAN) X(LOOPRUN) X(EOP)
+    X(NOOP) X(VAL) X(PUT) X(GET) X(FWD) X(REW) X(PTR_S) \
+    BF_ZERO_OP_LIST(X) \
+    X(MUL_MUL) X(VAL_MZ) X(VAL_MUL) X(VAL_ZERO) X(MZSCAN) X(VALSCAN) \
+    X(LOOPRUN) X(EOP)
 
 enum ebfo_CMD {
 #define X(n) bfo_##n,
