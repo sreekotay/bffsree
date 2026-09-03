@@ -80,5 +80,22 @@ The original Plush `fib` and `binary_tree` sources are from commit
 `e83f5515`; the matched ports intentionally change only the documented
 parameters and binary-tree representation.
 
+## SIMD scan results
+
+On the development host (Clang 18, AVX2 x86-64), seven
+compiler-matched interleaved runs compared the scalar fast interpreter
+with vectorized stride-3 scans:
+
+| workload | scalar median | SIMD median | speedup |
+|---|---:|---:|---:|
+| `fib` | 4.970 s | 0.921 s | 5.40x |
+| `binary_tree` | 2.685 s | 0.610 s | 4.40x |
+| `mandelbrot` | 5.292 s | 3.660 s | 1.45x |
+
+The AVX2 implementation checks eleven stride-3 candidate cells per
+unaligned 32-byte load. Sentinel padding keeps each load inside the tape
+allocation. Builds without AVX2, non-GCC/Clang compilers, and non-8-bit
+cells use the unchanged scalar scan.
+
 [article]: https://pointersgonewild.com/2026-09-02-plushs-new-register-based-interpreter/
 [go2bf]: https://github.com/itchyny/go2bf
