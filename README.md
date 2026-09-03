@@ -39,7 +39,6 @@ scale — bffsree still beats it on `hanoi`.
   - Loop collapse (`[-]` → zero, `[->+<]` → multiply-add, chained copies → `MUL_MUL`)
   - Scan loops (`[>]`, `[<<]`) → single strided scan op
   - Walking loops with arithmetic bodies → single-op internal loops
-  - Generated stack-navigation loops → direct `NAVLOOP` superinstructions
   - Pointer movement fused into every op (`off` field)
 - **Threaded dispatch**: computed-goto on GCC/Clang, switch elsewhere (`-DBF_USE_CGOTO=0/1`)
 - **Bounds-safe by default**: every access checked; the tape also carries
@@ -165,8 +164,6 @@ recursively; copies of copies become `MUL_MUL`.
 **Walking loops** — loops with net pointer drift can't flatten, but
 one-op bodies run as a single op (`MZSCAN`, `VALSCAN`) and straight-line
 arithmetic bodies run without re-entering dispatch (`LOOPRUN`).
-Common scan-heavy stack-navigation loops emitted by go2bf execute
-directly as `NAVLOOP`, avoiding dispatch or an internal opcode switch.
 
 **Offset fusion** — trailing pointer movement folds into each op's
 `off` field, so `++>+>` is two ops, not four.
@@ -186,7 +183,6 @@ directly as `NAVLOOP`, avoiding dispatch or an internal opcode switch.
 | `VAL_ZERO` | Set cell to constant |
 | `MZSCAN` / `VALSCAN` | Walking loop with one-op body |
 | `LOOPRUN` | Walking loop with arithmetic body, run internally |
-| `NAVLOOP` | Generated stack-navigation loop, run directly |
 | `EOP` | End of program |
 
 ## Project Structure
