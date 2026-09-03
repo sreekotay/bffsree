@@ -198,7 +198,8 @@ DONE:
 #if BF_ZERO_INDEX
     #define _bf_zupdate(I) \
         do { \
-            if (zi.z3) bf_zero_update(&zi, ptr + (I)); \
+            if (__builtin_expect(zi.z3 != 0, 0)) \
+                bf_zero_update(&zi, ptr + (I)); \
         } while (0)
 #else
     #define _bf_zupdate(I) do { } while (0)
