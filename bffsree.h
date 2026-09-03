@@ -73,17 +73,6 @@ typedef int16_t bf_off_t;
 #define BF_PROFILE 0
 #endif
 
-// Optional zero-cell indexes for fast strided scans. This trades update
-// overhead and about 48 KiB at the default tape size for O(1)-ish PTR_S
-// queries at the go2bf-dominant strides 3 and 8.
-#ifndef BF_ZERO_INDEX
-#define BF_ZERO_INDEX 0
-#endif
-
-#ifndef BF_ZERO_INDEX_TRACE
-#define BF_ZERO_INDEX_TRACE 0
-#endif
-
 // Threaded (computed-goto) dispatch: on by default for GCC/Clang, which
 // support labels-as-values. MSVC and others fall back to switch dispatch.
 // Override with -DBF_USE_CGOTO=0/1.
@@ -150,17 +139,9 @@ enum {
 // the enum here, both dispatch tables and the label array in
 // bffsree.c, and the printable names in main.c. Order is the enum
 // order; add ops here and give them an _op_* body in bffsree.c.
-#if BF_ZERO_INDEX
-#define BF_ZERO_OP_LIST(X) X(PTR_RAW) X(PTR_Z)
-#else
-#define BF_ZERO_OP_LIST(X)
-#endif
-
 #define BF_OP_LIST(X) \
-    X(NOOP) X(VAL) X(PUT) X(GET) X(FWD) X(REW) X(PTR_S) \
-    BF_ZERO_OP_LIST(X) \
-    X(MUL_MUL) X(VAL_MZ) X(VAL_MUL) X(VAL_ZERO) X(MZSCAN) X(VALSCAN) \
-    X(LOOPRUN) X(EOP)
+    X(NOOP) X(VAL) X(PUT) X(GET) X(FWD) X(REW) X(PTR_S) X(MUL_MUL) \
+    X(VAL_MZ) X(VAL_MUL) X(VAL_ZERO) X(MZSCAN) X(VALSCAN) X(LOOPRUN) X(EOP)
 
 enum ebfo_CMD {
 #define X(n) bfo_##n,

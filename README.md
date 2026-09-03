@@ -56,7 +56,6 @@ Requires a C compiler and Make (`cl /O2 /W3 /Fe:bffsree.exe main.c` works too).
 ```bash
 make            # default: O3, fully bounds-checked
 make fast       # benchmark build: unchecked dispatch (sentinel-pad safe), -march=native
-make indexed    # fast + adaptive zero indexes for long stride-3/8 scans
 make prof       # profiling build: op histogram + hottest loops on stderr
 make ref        # reference interpreter (no optimization), for comparison
 make debug      # -O0 -g
@@ -118,7 +117,7 @@ python run_benchmarks.py   # any platform
 
 `compare_languages.py` extends the comparison from
 [Plush's New Register-Based Interpreter Is Insanely Fast](https://pointersgonewild.com/2026-09-02-plushs-new-register-based-interpreter/)
-with Brainfuck programs run by this repository's `indexed` interpreter.
+with Brainfuck programs run by this repository's `fast` interpreter.
 Matched `fib`, `binary_tree`, and `mandelbrot` programs are provided for
 Plush, Python, Ruby, Lua, and Brainfuck. Every timed result is checked
 against canonical output.
@@ -138,9 +137,8 @@ make test-compare
 ```
 
 Set `PLUSH`, `PYTHON`, `RUBY`, or `LUA` to override a runtime command.
-The harness builds bffsree with
-`-DBF_FAST -DBF_ZERO_INDEX=1 -march=native` under the ignored
-`.bench-build/` directory. See
+The harness builds bffsree with `-DBF_FAST -march=native` under the
+ignored `.bench-build/` directory. See
 [`comparison/README.md`](comparison/README.md) for workload parameters,
 Brainfuck generation, and fairness limitations.
 
@@ -162,10 +160,6 @@ Collapsed output is legal analyzer input, so nested loops collapse
 recursively; copies of copies become `MUL_MUL`.
 
 **Scan loops** — `[>]`, `[<<]` etc. become a single strided `PTR_S`.
-The optional `indexed` build samples stride-3/8 scan lengths, then
-quickens long-scan programs to use compact zero-cell bitsets. This makes
-generated go2bf stack walks much faster at the cost of extra work on
-cell updates; use `fast` for general-purpose BFBench workloads.
 
 **Walking loops** — loops with net pointer drift can't flatten, but
 one-op bodies run as a single op (`MZSCAN`, `VALSCAN`) and straight-line
