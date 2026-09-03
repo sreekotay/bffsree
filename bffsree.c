@@ -97,6 +97,21 @@ static bf_cell* bf_zero_scan(bf_zero_index* zi, bf_cell* cell, int stride) {
     q = bit - r * n;
     return zi->base + r + (size_t)k * q;
 }
+
+static void bf_zero_quicken(bf_VM* vm, int indexed) {
+    bf_op* ops = (bf_op*)vm->prog_op;
+    int i;
+    for (i = 0; i < vm->progLen_op; i++) {
+        int c = ops[i].val;
+        if (indexed < 0) {
+            if (ops[i].cmd == bfo_PTR_RAW || ops[i].cmd == bfo_PTR_Z)
+                ops[i].cmd = bfo_PTR_S;
+        } else if (ops[i].cmd == bfo_PTR_S &&
+                   (c == 3 || c == -3 || c == 8 || c == -8)) {
+            ops[i].cmd = indexed ? bfo_PTR_Z : bfo_PTR_RAW;
+        }
+    }
+}
 #endif
 
 // =====================================================================
@@ -115,7 +130,6 @@ int bffsree_Eval(bf_VM* vm, char* inp, int ocount) {
     bf_zero_index zi;
     unsigned int zscan_calls;
     unsigned long long zscan_steps;
-    unsigned long long zwrite_count;
     int zscan_decided;
 #endif
 #endif
@@ -132,7 +146,6 @@ int bffsree_Eval(bf_VM* vm, char* inp, int ocount) {
     memset(&zi, 0, sizeof(zi));
     zscan_calls = 0;
     zscan_steps = 0;
-    zwrite_count = 0;
     zscan_decided = 0;
 #endif
 
@@ -186,40 +199,12 @@ DONE:
     #define _bf_zupdate(I) \
         do { \
             if (zi.z3) bf_zero_update(&zi, ptr + (I)); \
-            else if (!zscan_decided) zwrite_count++; \
         } while (0)
 #else
     #define _bf_zupdate(I) do { } while (0)
 #endif
 
-#if BF_ZERO_INDEX
-    #define _bf_scan(P) \
-        do { \
-            size_t zs = 0; \
-            c = (P)->val; \
-            tp = bf_zero_scan(&zi, ptr + sp, c); \
-            if (!tp) { \
-                tp = ptr + sp; \
-                while (*tp) { tp += c; zs++; } \
-                if (!zscan_decided && (c == 3 || c == -3 || c == 8 || c == -8)) { \
-                    zscan_calls++; \
-                    zscan_steps += zs; \
-                    if (zscan_calls == 4096u) { \
-                        zscan_decided = 1; \
-                        if (BF_ZERO_INDEX_TRACE) \
-                            fprintf(stderr, "// zero-index sample: scans=%u steps=%llu writes=%llu\\n", \
-                                zscan_calls, zscan_steps, zwrite_count); \
-                        if (zscan_steps > 32u * zscan_calls) \
-                            bf_zero_init(&zi, ptr - BF_TAPE_PAD, \
-                                (size_t)ptrLen + 2u * BF_TAPE_PAD); \
-                    } \
-                } \
-            } \
-            sp = (int)(tp - ptr); \
-            if (_mybounds(sp, ptrLen)) goto ERROR_BF; \
-        } while (0)
-#else
-    #define _bf_scan(P) \
+    #define _bf_scan_raw(P) \
         do { \
             c = (P)->val; \
             tp = ptr + sp; \
@@ -227,6 +212,42 @@ DONE:
             sp = (int)(tp - ptr); \
             if (_mybounds(sp, ptrLen)) goto ERROR_BF; \
         } while (0)
+
+#if BF_ZERO_INDEX
+    #define _bf_scan_indexed(P) \
+        do { \
+            c = (P)->val; \
+            tp = bf_zero_scan(&zi, ptr + sp, c); \
+            if (!tp) { tp = ptr + sp; while (*tp) tp += c; } \
+            sp = (int)(tp - ptr); \
+            if (_mybounds(sp, ptrLen)) goto ERROR_BF; \
+        } while (0)
+    #define _bf_scan(P) \
+        do { \
+            size_t zs = 0; \
+            c = (P)->val; \
+            tp = ptr + sp; \
+            while (*tp) { tp += c; zs++; } \
+            if (!zscan_decided && (c == 3 || c == -3 || c == 8 || c == -8)) { \
+                zscan_calls++; \
+                zscan_steps += zs; \
+                if (zscan_calls == 4096u) { \
+                    zscan_decided = 1; \
+                    if (BF_ZERO_INDEX_TRACE) \
+                        fprintf(stderr, "// zero-index sample: scans=%u steps=%llu\n", \
+                            zscan_calls, zscan_steps); \
+                    if (zscan_steps > 32u * zscan_calls) \
+                        bf_zero_init(&zi, ptr - BF_TAPE_PAD, \
+                            (size_t)ptrLen + 2u * BF_TAPE_PAD); \
+                    bf_zero_quicken(vm, zi.z3 != 0); \
+                } \
+            } \
+            sp = (int)(tp - ptr); \
+            if (_mybounds(sp, ptrLen)) goto ERROR_BF; \
+        } while (0)
+#else
+    #define _bf_scan(P) _bf_scan_raw(P)
+    #define _bf_scan_indexed(P) _bf_scan_raw(P)
 #endif
 
     // -----------------------------------------------------------------
@@ -250,6 +271,8 @@ DONE:
                                  ptr[sp] += (bf_cell)(P)->buf; \
                                  _bf_zupdate(sp); } while (0)
     #define _op_PTR_S(P)    _bf_scan(P)
+    #define _op_PTR_RAW(P)  _bf_scan_raw(P)
+    #define _op_PTR_Z(P)    _bf_scan_indexed(P)
     #define _op_VAL_MZ(P)   do { ptr[sp + (P)->buf] += (bf_cell)((P)->val * ptr[sp]); \
                                  ptr[sp] = 0; \
                                  _bf_zupdate(sp + (P)->buf); \
@@ -389,9 +412,12 @@ DONE:
     #undef _bf_prof
     #undef _bf_zupdate
     #undef _bf_scan
+    #undef _bf_scan_raw
+    #undef _bf_scan_indexed
 
 DONE:
 #if BF_ZERO_INDEX
+    bf_zero_quicken(vm, -1);
     bf_zero_free(&zi);
 #endif
     if (bfo == 0) {
