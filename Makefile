@@ -59,7 +59,8 @@ fast: $(TARGET)
 # then maintains compact zero-cell bitsets only when scans are long enough
 # to repay the update overhead.
 indexed: CFLAGS = -Wall -Wextra -O3 -DNDEBUG -DBF_FAST -DBF_ZERO_INDEX=1 -march=native -DBF_CELL_BITS=$(CELL_BITS) -DBF_CELL_SIGNED=$(CELL_SIGNED) -DBF_OP_BUF_BITS=$(OP_BUF_BITS)
-indexed: $(TARGET)
+indexed:
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $(TARGET) $(SRCS)
 
 # Profiling build: dumps a dynamic op histogram and the hottest loop
 # sites to stderr after the run

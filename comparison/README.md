@@ -81,5 +81,21 @@ The original Plush `fib` and `binary_tree` sources are from commit
 `e83f5515`; the matched ports intentionally change only the documented
 parameters and binary-tree representation.
 
+## Indexed-scan results
+
+On the development host (Clang 18, x86-64), five compiler-matched
+interleaved runs compared `fast` with the adaptive zero-index tier:
+
+| workload | fast median | indexed median | speedup |
+|---|---:|---:|---:|
+| `fib` | 4.974 s | 1.810 s | 2.75x |
+| `binary_tree` | 2.686 s | 1.193 s | 2.25x |
+| `mandelbrot` | 5.293 s | 5.299 s | 1.00x |
+
+The tier samples 4096 stride-3/8 scans. Long-scan programs quicken those
+IR sites to a zero-bitset lookup and maintain the indexes on writes;
+short-scan programs quicken back to the original raw scan. This avoids
+the severe update overhead of indexing every workload unconditionally.
+
 [article]: https://pointersgonewild.com/2026-09-02-plushs-new-register-based-interpreter/
 [go2bf]: https://github.com/itchyny/go2bf
