@@ -55,9 +55,9 @@ release: $(TARGET)
 fast: CFLAGS = -Wall -Wextra -O3 -DNDEBUG -DBF_FAST -march=native -DBF_CELL_BITS=$(CELL_BITS) -DBF_CELL_SIGNED=$(CELL_SIGNED) -DBF_OP_BUF_BITS=$(OP_BUF_BITS)
 fast: $(TARGET)
 
-# Indexed-scan build: maintains compact zero-cell bitsets for the common
-# stride-3/8 scans emitted by go2bf. This has update overhead, so it stays
-# separate from the general-purpose fast tier.
+# Indexed-scan build: samples the common stride-3/8 scans emitted by go2bf,
+# then maintains compact zero-cell bitsets only when scans are long enough
+# to repay the update overhead.
 indexed: CFLAGS = -Wall -Wextra -O3 -DNDEBUG -DBF_FAST -DBF_ZERO_INDEX=1 -march=native -DBF_CELL_BITS=$(CELL_BITS) -DBF_CELL_SIGNED=$(CELL_SIGNED) -DBF_OP_BUF_BITS=$(OP_BUF_BITS)
 indexed: $(TARGET)
 

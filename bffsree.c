@@ -113,6 +113,9 @@ int bffsree_Eval(bf_VM* vm, char* inp, int ocount) {
     bf_cell* tp;
 #if BF_ZERO_INDEX
     bf_zero_index zi;
+    unsigned int zscan_calls;
+    unsigned long long zscan_steps;
+    int zscan_decided;
 #endif
 #endif
     int pc = vm->pc;
@@ -125,8 +128,10 @@ int bffsree_Eval(bf_VM* vm, char* inp, int ocount) {
     }
 
 #if BF_ZERO_INDEX && !_refInterp
-    bf_zero_init(&zi, ptr - BF_TAPE_PAD,
-                 (size_t)ptrLen + 2u * BF_TAPE_PAD);
+    memset(&zi, 0, sizeof(zi));
+    zscan_calls = 0;
+    zscan_steps = 0;
+    zscan_decided = 0;
 #endif
 
 #if _refInterp
@@ -184,9 +189,23 @@ DONE:
 #if BF_ZERO_INDEX
     #define _bf_scan(P) \
         do { \
+            size_t zs = 0; \
             c = (P)->val; \
             tp = bf_zero_scan(&zi, ptr + sp, c); \
-            if (!tp) { tp = ptr + sp; while (*tp) tp += c; } \
+            if (!tp) { \
+                tp = ptr + sp; \
+                while (*tp) { tp += c; zs++; } \
+                if (!zscan_decided && (c == 3 || c == -3 || c == 8 || c == -8)) { \
+                    zscan_calls++; \
+                    zscan_steps += zs; \
+                    if (zscan_calls == 4096u) { \
+                        zscan_decided = 1; \
+                        if (zscan_steps > 32u * zscan_calls) \
+                            bf_zero_init(&zi, ptr - BF_TAPE_PAD, \
+                                (size_t)ptrLen + 2u * BF_TAPE_PAD); \
+                    } \
+                } \
+            } \
             sp = (int)(tp - ptr); \
             if (_mybounds(sp, ptrLen)) goto ERROR_BF; \
         } while (0)
