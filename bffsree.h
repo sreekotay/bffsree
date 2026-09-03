@@ -80,6 +80,10 @@ typedef int16_t bf_off_t;
 #define BF_ZERO_INDEX 0
 #endif
 
+#ifndef BF_ZERO_INDEX_TRACE
+#define BF_ZERO_INDEX_TRACE 0
+#endif
+
 // Threaded (computed-goto) dispatch: on by default for GCC/Clang, which
 // support labels-as-values. MSVC and others fall back to switch dispatch.
 // Override with -DBF_USE_CGOTO=0/1.

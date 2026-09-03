@@ -115,6 +115,7 @@ int bffsree_Eval(bf_VM* vm, char* inp, int ocount) {
     bf_zero_index zi;
     unsigned int zscan_calls;
     unsigned long long zscan_steps;
+    unsigned long long zwrite_count;
     int zscan_decided;
 #endif
 #endif
@@ -131,6 +132,7 @@ int bffsree_Eval(bf_VM* vm, char* inp, int ocount) {
     memset(&zi, 0, sizeof(zi));
     zscan_calls = 0;
     zscan_steps = 0;
+    zwrite_count = 0;
     zscan_decided = 0;
 #endif
 
@@ -181,7 +183,11 @@ DONE:
     #define _bf_tick()  do { } while (0)
 #endif
 #if BF_ZERO_INDEX
-    #define _bf_zupdate(I) bf_zero_update(&zi, ptr + (I))
+    #define _bf_zupdate(I) \
+        do { \
+            if (zi.z3) bf_zero_update(&zi, ptr + (I)); \
+            else if (!zscan_decided) zwrite_count++; \
+        } while (0)
 #else
     #define _bf_zupdate(I) do { } while (0)
 #endif
@@ -200,6 +206,9 @@ DONE:
                     zscan_steps += zs; \
                     if (zscan_calls == 4096u) { \
                         zscan_decided = 1; \
+                        if (BF_ZERO_INDEX_TRACE) \
+                            fprintf(stderr, "// zero-index sample: scans=%u steps=%llu writes=%llu\\n", \
+                                zscan_calls, zscan_steps, zwrite_count); \
                         if (zscan_steps > 32u * zscan_calls) \
                             bf_zero_init(&zi, ptr - BF_TAPE_PAD, \
                                 (size_t)ptrLen + 2u * BF_TAPE_PAD); \
