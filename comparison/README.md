@@ -13,11 +13,12 @@ using 11 interleaved samples and the median process wall time.
 | `binary_tree` | depth 7, 100 traversals | depth 14, 2000 traversals | wrapping checksum `3264000` |
 | `mandelbrot` | 65x41, 20 iterations, signed 4-bit fixed point | new workload | 41-line ASCII image |
 
-The article's exact `fib(38)` was tested as generated Brainfuck, but did
-not complete in 60 seconds on the development machine. `fib(26)` takes
-about five seconds under bffsree-fast and keeps an 11-run comparison
-practical. Binary-tree parameters are reduced for the same reason.
-Every language uses the reduced parameters in this suite.
+The article's exact `fib(38)` was tested with the scalar fast
+interpreter, but did not complete in 60 seconds on the development
+machine. `fib(26)` takes about five seconds with scalar scans and about
+0.9 seconds with AVX2 stride-3 scans. Binary-tree parameters are reduced
+for the same reason. Every language uses the reduced parameters in this
+suite.
 
 Brainfuck has no functions, objects, or allocator. `fib.b` uses an
 explicit generated call stack and preserves the naive recursive
