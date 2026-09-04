@@ -73,6 +73,26 @@ typedef int16_t bf_off_t;
 #define BF_PROFILE 0
 #endif
 
+// Debug-only shadow check for AVX2 stride-3 scans. When enabled, every
+// vector result is compared with the scalar algorithm before use.
+#ifndef BF_SIMD_SCAN
+#define BF_SIMD_SCAN 1
+#endif
+
+#ifndef BF_SIMD_SCAN_GUARD
+#define BF_SIMD_SCAN_GUARD 0
+#endif
+
+// Portable 64-bit word-at-a-time stride-3 scan experiment. This takes
+// precedence over AVX2 when explicitly enabled.
+#ifndef BF_WORD_SCAN
+#define BF_WORD_SCAN 0
+#endif
+
+#ifndef BF_WORD_SCAN_GUARD
+#define BF_WORD_SCAN_GUARD 0
+#endif
+
 // Threaded (computed-goto) dispatch: on by default for GCC/Clang, which
 // support labels-as-values. MSVC and others fall back to switch dispatch.
 // Override with -DBF_USE_CGOTO=0/1.

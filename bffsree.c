@@ -10,6 +10,160 @@
 #define _refInterp 0
 #endif
 
+#if BF_WORD_SCAN && BF_CELL_BITS == 8 && !_refInterp
+#define BF_WORD_SCAN3 1
+
+#if defined(_WIN32) || \
+    (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+#define BF_WORD_BYTE0 UINT64_C(0x0000000000000080)
+#define BF_WORD_BYTE3 UINT64_C(0x0000000080000000)
+#define BF_WORD_BYTE6 UINT64_C(0x0080000000000000)
+#elif defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#define BF_WORD_BYTE0 UINT64_C(0x8000000000000000)
+#define BF_WORD_BYTE3 UINT64_C(0x0000008000000000)
+#define BF_WORD_BYTE6 UINT64_C(0x0000000000008000)
+#endif
+
+static uint64_t bf_zero_bytes64(uint64_t x) {
+    const uint64_t low7 = UINT64_C(0x7f7f7f7f7f7f7f7f);
+    const uint64_t high = UINT64_C(0x8080808080808080);
+    return ~(((x & low7) + low7) | x | low7) & high;
+}
+
+static bf_cell* bf_word_scan3_forward(bf_cell* p) {
+#if BF_WORD_SCAN_GUARD
+    bf_cell* scalar = p;
+    while (*scalar) scalar += 3;
+#endif
+
+    if (*p) {
+        for (;;) {
+            uint64_t cells;
+            uint64_t zeros;
+            memcpy(&cells, p, sizeof(cells));
+            zeros = bf_zero_bytes64(cells);
+#if defined(BF_WORD_BYTE0)
+            if (zeros & BF_WORD_BYTE0) break;
+            if (zeros & BF_WORD_BYTE3) { p += 3; break; }
+            if (zeros & BF_WORD_BYTE6) { p += 6; break; }
+#else
+            {
+                const unsigned char* z = (const unsigned char*)&zeros;
+                if (z[0]) break;
+                if (z[3]) { p += 3; break; }
+                if (z[6]) { p += 6; break; }
+            }
+#endif
+            p += 9;
+        }
+    }
+
+#if BF_WORD_SCAN_GUARD
+    if (p != scalar) abort();
+#endif
+    return p;
+}
+
+static bf_cell* bf_word_scan3_backward(bf_cell* p) {
+#if BF_WORD_SCAN_GUARD
+    bf_cell* scalar = p;
+    while (*scalar) scalar -= 3;
+#endif
+
+    if (*p) {
+        for (;;) {
+            bf_cell* base = p - 6;
+            uint64_t cells;
+            uint64_t zeros;
+            memcpy(&cells, base, sizeof(cells));
+            zeros = bf_zero_bytes64(cells);
+#if defined(BF_WORD_BYTE0)
+            if (zeros & BF_WORD_BYTE6) break;
+            if (zeros & BF_WORD_BYTE3) { p -= 3; break; }
+            if (zeros & BF_WORD_BYTE0) { p -= 6; break; }
+#else
+            {
+                const unsigned char* z = (const unsigned char*)&zeros;
+                if (z[6]) break;
+                if (z[3]) { p -= 3; break; }
+                if (z[0]) { p -= 6; break; }
+            }
+#endif
+            p -= 9;
+        }
+    }
+
+#if BF_WORD_SCAN_GUARD
+    if (p != scalar) abort();
+#endif
+    return p;
+}
+#else
+#define BF_WORD_SCAN3 0
+#endif
+
+#if BF_SIMD_SCAN && !BF_WORD_SCAN && defined(__GNUC__) && defined(__AVX2__) && BF_CELL_BITS == 8 && !_refInterp
+#include <immintrin.h>
+#define BF_SIMD_SCAN3 1
+
+static bf_cell* bf_scan3_forward(bf_cell* p) {
+    const __m256i zero = _mm256_setzero_si256();
+    const unsigned lane_mask = UINT32_C(0x49249249);
+#if BF_SIMD_SCAN_GUARD
+    bf_cell* scalar = p;
+    while (*scalar) scalar += 3;
+#endif
+
+    if (*p) {
+        for (;;) {
+            __m256i cells = _mm256_loadu_si256((const __m256i*)p);
+            unsigned zeros = (unsigned)_mm256_movemask_epi8(
+                _mm256_cmpeq_epi8(cells, zero)) & lane_mask;
+            if (zeros) {
+                p += (unsigned)__builtin_ctz(zeros);
+                break;
+            }
+            p += 33;
+        }
+    }
+
+#if BF_SIMD_SCAN_GUARD
+    if (p != scalar) abort();
+#endif
+    return p;
+}
+
+static bf_cell* bf_scan3_backward(bf_cell* p) {
+    const __m256i zero = _mm256_setzero_si256();
+    const unsigned lane_mask = UINT32_C(0x49249249);
+#if BF_SIMD_SCAN_GUARD
+    bf_cell* scalar = p;
+    while (*scalar) scalar -= 3;
+#endif
+
+    if (*p) {
+        for (;;) {
+            bf_cell* base = p - 30;
+            __m256i cells = _mm256_loadu_si256((const __m256i*)base);
+            unsigned zeros = (unsigned)_mm256_movemask_epi8(
+                _mm256_cmpeq_epi8(cells, zero)) & lane_mask;
+            if (zeros) {
+                p = base + (31u - (unsigned)__builtin_clz(zeros));
+                break;
+            }
+            p -= 33;
+        }
+    }
+
+#if BF_SIMD_SCAN_GUARD
+    if (p != scalar) abort();
+#endif
+    return p;
+}
+#else
+#define BF_SIMD_SCAN3 0
+#endif
+
 // =====================================================================
 // main VM loop for bfi
 // =====================================================================
@@ -95,7 +249,19 @@ DONE:
                                  ptr[sp] += (bf_cell)(P)->buf; } while (0)
     #define _op_REW(P)      do { if (ptr[sp] != 0) (P) += (P)->val; \
                                  ptr[sp] += (bf_cell)(P)->buf; } while (0)
-    #define _op_PTR_S(P)    do { c = (P)->val; tp = ptr + sp; while (*tp) tp += c; \
+#if BF_WORD_SCAN3
+    #define _bf_ptr_scan()  do { if (c == 3) tp = bf_word_scan3_forward(tp); \
+                                 else if (c == -3) tp = bf_word_scan3_backward(tp); \
+                                 else while (*tp) tp += c; } while (0)
+#elif BF_SIMD_SCAN3
+    #define _bf_ptr_scan()  do { if (c == 3) tp = bf_scan3_forward(tp); \
+                                 else if (c == -3) tp = bf_scan3_backward(tp); \
+                                 else while (*tp) tp += c; } while (0)
+#else
+    #define _bf_ptr_scan()  do { while (*tp) tp += c; } while (0)
+#endif
+    #define _op_PTR_S(P)    do { c = (P)->val; tp = ptr + sp; \
+                                 _bf_ptr_scan(); \
                                  sp = (int)(tp - ptr); \
                                  if (_mybounds(sp, ptrLen)) goto ERROR_BF; } while (0)
     #define _op_VAL_MZ(P)   do { ptr[sp + (P)->buf] += (bf_cell)((P)->val * ptr[sp]); \
@@ -215,6 +381,7 @@ DONE:
     #undef _bf_tail
     #undef _bf_tick
     #undef _bf_prof
+    #undef _bf_ptr_scan
 
 DONE:
     if (bfo == 0) {
