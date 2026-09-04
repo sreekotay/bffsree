@@ -115,5 +115,11 @@ Known little- and big-endian targets use register masks directly.
 Unknown byte orders retain a standards-safe object-byte fallback.
 AVX2 remains the faster option where available.
 
+An explicit eight-byte shift/OR construction was also tested. Against
+the constant-size `memcpy` load, five interleaved runs were 1.79x slower
+on `fib`, 1.84x slower on `binary_tree`, and 1.39x slower on
+`mandelbrot`. GCC did not combine that source pattern into an equivalent
+unaligned word load, so the experiment was removed.
+
 [article]: https://pointersgonewild.com/2026-09-02-plushs-new-register-based-interpreter/
 [go2bf]: https://github.com/itchyny/go2bf
