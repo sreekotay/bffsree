@@ -102,68 +102,6 @@ static bf_cell* bf_word_scan3_backward(bf_cell* p) {
 #define BF_WORD_SCAN3 0
 #endif
 
-#if BF_SIMD_SCAN && !BF_WORD_SCAN && defined(__GNUC__) && defined(__AVX2__) && BF_CELL_BITS == 8 && !_refInterp
-#include <immintrin.h>
-#define BF_SIMD_SCAN3 1
-
-static bf_cell* bf_scan3_forward(bf_cell* p) {
-    const __m256i zero = _mm256_setzero_si256();
-    const unsigned lane_mask = UINT32_C(0x49249249);
-#if BF_SIMD_SCAN_GUARD
-    bf_cell* scalar = p;
-    while (*scalar) scalar += 3;
-#endif
-
-    if (*p) {
-        for (;;) {
-            __m256i cells = _mm256_loadu_si256((const __m256i*)p);
-            unsigned zeros = (unsigned)_mm256_movemask_epi8(
-                _mm256_cmpeq_epi8(cells, zero)) & lane_mask;
-            if (zeros) {
-                p += (unsigned)__builtin_ctz(zeros);
-                break;
-            }
-            p += 33;
-        }
-    }
-
-#if BF_SIMD_SCAN_GUARD
-    if (p != scalar) abort();
-#endif
-    return p;
-}
-
-static bf_cell* bf_scan3_backward(bf_cell* p) {
-    const __m256i zero = _mm256_setzero_si256();
-    const unsigned lane_mask = UINT32_C(0x49249249);
-#if BF_SIMD_SCAN_GUARD
-    bf_cell* scalar = p;
-    while (*scalar) scalar -= 3;
-#endif
-
-    if (*p) {
-        for (;;) {
-            bf_cell* base = p - 30;
-            __m256i cells = _mm256_loadu_si256((const __m256i*)base);
-            unsigned zeros = (unsigned)_mm256_movemask_epi8(
-                _mm256_cmpeq_epi8(cells, zero)) & lane_mask;
-            if (zeros) {
-                p = base + (31u - (unsigned)__builtin_clz(zeros));
-                break;
-            }
-            p -= 33;
-        }
-    }
-
-#if BF_SIMD_SCAN_GUARD
-    if (p != scalar) abort();
-#endif
-    return p;
-}
-#else
-#define BF_SIMD_SCAN3 0
-#endif
-
 // =====================================================================
 // main VM loop for bfi
 // =====================================================================
@@ -252,10 +190,6 @@ DONE:
 #if BF_WORD_SCAN3
     #define _bf_ptr_scan()  do { if (c == 3) tp = bf_word_scan3_forward(tp); \
                                  else if (c == -3) tp = bf_word_scan3_backward(tp); \
-                                 else while (*tp) tp += c; } while (0)
-#elif BF_SIMD_SCAN3
-    #define _bf_ptr_scan()  do { if (c == 3) tp = bf_scan3_forward(tp); \
-                                 else if (c == -3) tp = bf_scan3_backward(tp); \
                                  else while (*tp) tp += c; } while (0)
 #else
     #define _bf_ptr_scan()  do { while (*tp) tp += c; } while (0)

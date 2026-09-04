@@ -82,7 +82,6 @@ def build_bffsree() -> list[str]:
         "-O3",
         "-DNDEBUG",
         "-DBF_FAST=1",
-        "-march=native",
         "-DBF_CELL_BITS=8",
         "-DBF_CELL_SIGNED=0",
         "-DBF_OP_BUF_BITS=16",

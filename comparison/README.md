@@ -16,9 +16,9 @@ using 11 interleaved samples and the median process wall time.
 The article's exact `fib(38)` was tested with the scalar fast
 interpreter, but did not complete in 60 seconds on the development
 machine. `fib(26)` takes about five seconds with scalar scans and about
-0.9 seconds with AVX2 stride-3 scans. Binary-tree parameters are reduced
-for the same reason. Every language uses the reduced parameters in this
-suite.
+3.0 seconds with portable 64-bit stride-3 scans. Binary-tree parameters
+are reduced for the same reason. Every language uses the reduced
+parameters in this suite.
 
 Brainfuck has no functions, objects, or allocator. `fib.b` uses an
 explicit generated call stack and preserves the naive recursive
@@ -81,27 +81,9 @@ The original Plush `fib` and `binary_tree` sources are from commit
 `e83f5515`; the matched ports intentionally change only the documented
 parameters and binary-tree representation.
 
-## SIMD scan results
-
-On the development host (Clang 18, AVX2 x86-64), seven
-compiler-matched interleaved runs compared the scalar fast interpreter
-with vectorized stride-3 scans:
-
-| workload | scalar median | SIMD median | speedup |
-|---|---:|---:|---:|
-| `fib` | 4.970 s | 0.921 s | 5.40x |
-| `binary_tree` | 2.685 s | 0.610 s | 4.40x |
-| `mandelbrot` | 5.292 s | 3.660 s | 1.45x |
-
-The AVX2 implementation checks eleven stride-3 candidate cells per
-unaligned 32-byte load. Sentinel padding keeps each load inside the tape
-allocation. Builds without AVX2, non-GCC/Clang compilers, and non-8-bit
-cells use the unchanged scalar scan.
-
 ## Portable 64-bit scan results
 
-`make word` uses an alternative implementation with no SIMD or
-`-march=native` requirement. It loads eight bytes with `memcpy`, applies
+The 8-bit interpreter loads eight bytes with `memcpy`, applies
 an exact zero-byte bit hack, and tests the stride-3 candidates at byte
 offsets 0, 3, and 6. Five interleaved GCC `-O3` runs measured:
 
@@ -113,7 +95,6 @@ offsets 0, 3, and 6. Five interleaved GCC `-O3` runs measured:
 
 Known little- and big-endian targets use register masks directly.
 Unknown byte orders retain a standards-safe object-byte fallback.
-AVX2 remains the faster option where available.
 
 An explicit eight-byte shift/OR construction was also tested. Against
 the constant-size `memcpy` load, five interleaved runs were 1.79x slower
