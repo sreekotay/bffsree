@@ -10,7 +10,74 @@
 #define _refInterp 0
 #endif
 
-#if defined(__GNUC__) && defined(__AVX2__) && BF_CELL_BITS == 8 && !_refInterp
+#if BF_WORD_SCAN && BF_CELL_BITS == 8 && !_refInterp
+#define BF_WORD_SCAN3 1
+
+static uint64_t bf_zero_bytes64(uint64_t x) {
+    const uint64_t low7 = UINT64_C(0x7f7f7f7f7f7f7f7f);
+    const uint64_t high = UINT64_C(0x8080808080808080);
+    return ~(((x & low7) + low7) | x | low7) & high;
+}
+
+static bf_cell* bf_word_scan3_forward(bf_cell* p) {
+#if BF_WORD_SCAN_GUARD
+    bf_cell* scalar = p;
+    while (*scalar) scalar += 3;
+#endif
+
+    if (*p) {
+        for (;;) {
+            uint64_t cells;
+            uint64_t zeros;
+            const unsigned char* z;
+            memcpy(&cells, p, sizeof(cells));
+            zeros = bf_zero_bytes64(cells);
+            z = (const unsigned char*)&zeros;
+            if (z[0]) break;
+            if (z[3]) { p += 3; break; }
+            if (z[6]) { p += 6; break; }
+            p += 9;
+        }
+    }
+
+#if BF_WORD_SCAN_GUARD
+    if (p != scalar) abort();
+#endif
+    return p;
+}
+
+static bf_cell* bf_word_scan3_backward(bf_cell* p) {
+#if BF_WORD_SCAN_GUARD
+    bf_cell* scalar = p;
+    while (*scalar) scalar -= 3;
+#endif
+
+    if (*p) {
+        for (;;) {
+            bf_cell* base = p - 6;
+            uint64_t cells;
+            uint64_t zeros;
+            const unsigned char* z;
+            memcpy(&cells, base, sizeof(cells));
+            zeros = bf_zero_bytes64(cells);
+            z = (const unsigned char*)&zeros;
+            if (z[6]) break;
+            if (z[3]) { p -= 3; break; }
+            if (z[0]) { p -= 6; break; }
+            p -= 9;
+        }
+    }
+
+#if BF_WORD_SCAN_GUARD
+    if (p != scalar) abort();
+#endif
+    return p;
+}
+#else
+#define BF_WORD_SCAN3 0
+#endif
+
+#if BF_SIMD_SCAN && !BF_WORD_SCAN && defined(__GNUC__) && defined(__AVX2__) && BF_CELL_BITS == 8 && !_refInterp
 #include <immintrin.h>
 #define BF_SIMD_SCAN3 1
 
@@ -157,7 +224,11 @@ DONE:
                                  ptr[sp] += (bf_cell)(P)->buf; } while (0)
     #define _op_REW(P)      do { if (ptr[sp] != 0) (P) += (P)->val; \
                                  ptr[sp] += (bf_cell)(P)->buf; } while (0)
-#if BF_SIMD_SCAN3
+#if BF_WORD_SCAN3
+    #define _bf_ptr_scan()  do { if (c == 3) tp = bf_word_scan3_forward(tp); \
+                                 else if (c == -3) tp = bf_word_scan3_backward(tp); \
+                                 else while (*tp) tp += c; } while (0)
+#elif BF_SIMD_SCAN3
     #define _bf_ptr_scan()  do { if (c == 3) tp = bf_scan3_forward(tp); \
                                  else if (c == -3) tp = bf_scan3_backward(tp); \
                                  else while (*tp) tp += c; } while (0)
