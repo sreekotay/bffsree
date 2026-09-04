@@ -13,6 +13,17 @@
 #if BF_WORD_SCAN && BF_CELL_BITS == 8 && !_refInterp
 #define BF_WORD_SCAN3 1
 
+#if defined(_WIN32) || \
+    (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+#define BF_WORD_BYTE0 UINT64_C(0x0000000000000080)
+#define BF_WORD_BYTE3 UINT64_C(0x0000000080000000)
+#define BF_WORD_BYTE6 UINT64_C(0x0080000000000000)
+#elif defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#define BF_WORD_BYTE0 UINT64_C(0x8000000000000000)
+#define BF_WORD_BYTE3 UINT64_C(0x0000008000000000)
+#define BF_WORD_BYTE6 UINT64_C(0x0000000000008000)
+#endif
+
 static uint64_t bf_zero_bytes64(uint64_t x) {
     const uint64_t low7 = UINT64_C(0x7f7f7f7f7f7f7f7f);
     const uint64_t high = UINT64_C(0x8080808080808080);
@@ -29,13 +40,20 @@ static bf_cell* bf_word_scan3_forward(bf_cell* p) {
         for (;;) {
             uint64_t cells;
             uint64_t zeros;
-            const unsigned char* z;
             memcpy(&cells, p, sizeof(cells));
             zeros = bf_zero_bytes64(cells);
-            z = (const unsigned char*)&zeros;
-            if (z[0]) break;
-            if (z[3]) { p += 3; break; }
-            if (z[6]) { p += 6; break; }
+#if defined(BF_WORD_BYTE0)
+            if (zeros & BF_WORD_BYTE0) break;
+            if (zeros & BF_WORD_BYTE3) { p += 3; break; }
+            if (zeros & BF_WORD_BYTE6) { p += 6; break; }
+#else
+            {
+                const unsigned char* z = (const unsigned char*)&zeros;
+                if (z[0]) break;
+                if (z[3]) { p += 3; break; }
+                if (z[6]) { p += 6; break; }
+            }
+#endif
             p += 9;
         }
     }
@@ -57,13 +75,20 @@ static bf_cell* bf_word_scan3_backward(bf_cell* p) {
             bf_cell* base = p - 6;
             uint64_t cells;
             uint64_t zeros;
-            const unsigned char* z;
             memcpy(&cells, base, sizeof(cells));
             zeros = bf_zero_bytes64(cells);
-            z = (const unsigned char*)&zeros;
-            if (z[6]) break;
-            if (z[3]) { p -= 3; break; }
-            if (z[0]) { p -= 6; break; }
+#if defined(BF_WORD_BYTE0)
+            if (zeros & BF_WORD_BYTE6) break;
+            if (zeros & BF_WORD_BYTE3) { p -= 3; break; }
+            if (zeros & BF_WORD_BYTE0) { p -= 6; break; }
+#else
+            {
+                const unsigned char* z = (const unsigned char*)&zeros;
+                if (z[6]) break;
+                if (z[3]) { p -= 3; break; }
+                if (z[0]) { p -= 6; break; }
+            }
+#endif
             p -= 9;
         }
     }
