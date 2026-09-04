@@ -98,5 +98,22 @@ unaligned 32-byte load. Sentinel padding keeps each load inside the tape
 allocation. Builds without AVX2, non-GCC/Clang compilers, and non-8-bit
 cells use the unchanged scalar scan.
 
+## Portable 64-bit scan results
+
+`make word` uses an alternative implementation with no SIMD or
+`-march=native` requirement. It loads eight bytes with `memcpy`, applies
+an exact zero-byte bit hack, and tests the stride-3 candidates at byte
+offsets 0, 3, and 6. Five interleaved GCC `-O3` runs measured:
+
+| workload | scalar median | word64 median | speedup |
+|---|---:|---:|---:|
+| `fib` | 4.418 s | 2.994 s | 1.48x |
+| `binary_tree` | 2.321 s | 1.561 s | 1.49x |
+| `mandelbrot` | 4.694 s | 4.077 s | 1.15x |
+
+Known little- and big-endian targets use register masks directly.
+Unknown byte orders retain a standards-safe object-byte fallback.
+AVX2 remains the faster option where available.
+
 [article]: https://pointersgonewild.com/2026-09-02-plushs-new-register-based-interpreter/
 [go2bf]: https://github.com/itchyny/go2bf
