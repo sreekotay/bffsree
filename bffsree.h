@@ -89,12 +89,6 @@ typedef int16_t bf_off_t;
 #define BF_WORD_SCAN 0
 #endif
 
-// Build the 64-bit scan word explicitly from shifted bytes instead of
-// using constant-size memcpy. Intended for compiler comparison.
-#ifndef BF_WORD_PACK
-#define BF_WORD_PACK 0
-#endif
-
 #ifndef BF_WORD_SCAN_GUARD
 #define BF_WORD_SCAN_GUARD 0
 #endif
