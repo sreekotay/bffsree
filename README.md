@@ -114,34 +114,34 @@ Standard benchmark programs live in `BFBench-1.4/`
 python run_benchmarks.py   # any platform
 ```
 
-### Comparing language interpreters
+### Comparing Brainfuck runtimes
 
-`compare_languages.py` extends the comparison from
-[Plush's New Register-Based Interpreter Is Insanely Fast](https://pointersgonewild.com/2026-09-02-plushs-new-register-based-interpreter/)
-with Brainfuck programs run by this repository's `fast` interpreter.
-Matched `fib`, `binary_tree`, and `mandelbrot` programs are provided for
-Plush, Python, Ruby, Lua, and Brainfuck. Every timed result is checked
-against canonical output.
+`compare_bf_runtimes.py` runs the same Brainfuck corpus under checked,
+fast word64, and reference bffsree builds, bf-cpp, and Tritium's
+interpreter and JIT. The corpus combines BFBench 1.4 with generated
+`fib`, `binary_tree`, and `mandelbrot` programs. Every timed result is
+checked against canonical output.
 
-The default protocol uses the article's 11 interleaved runs and median
-wall time. A fixed seed makes the order reproducible. One untimed
-validation/warmup per runtime and workload is included.
+The default protocol uses seven interleaved runs and median process wall
+time. A fixed seed makes the order reproducible. One untimed validation
+run per runtime and workload is included; pairs exceeding the timeout
+are reported rather than silently omitted.
 
 ```bash
-make compare                 # skips unavailable language runtimes
+make compare                 # skips unavailable external runtimes
 
-# Require all five runtimes and save raw samples plus system metadata
-python3 compare_languages.py --require-all --json results.json
+# Clone pinned bf-cpp and Tritium revisions, then benchmark every runtime
+python3 compare_bf_runtimes.py --prepare --require-all --json results.json
 
-# Unit tests plus a one-round Python/bffsree correctness comparison
+# Unit tests plus a short bffsree correctness comparison
 make test-compare
 ```
 
-Set `PLUSH`, `PYTHON`, `RUBY`, or `LUA` to override a runtime command.
-The harness builds portable bffsree with `-DBF_FAST` under the ignored
+Set `BF_CPP` or `TRITIUM` to override external executable commands.
+The harness builds all bffsree variants under the ignored
 `.bench-build/` directory. See
 [`comparison/README.md`](comparison/README.md) for workload parameters,
-Brainfuck generation, and fairness limitations.
+source revisions, and methodology.
 
 ## Optimizations
 

@@ -105,13 +105,15 @@ endif
 bench: $(TARGET)
 	python3 run_benchmarks.py
 
-# Compare matched programs across available language runtimes and bffsree.
+# Compare the Brainfuck corpus across bffsree, bf-cpp, and Tritium.
 compare:
-	python3 compare_languages.py
+	python3 compare_bf_runtimes.py
 
 test-compare:
-	python3 -m unittest -v test_compare_languages.py
-	python3 compare_languages.py -n 1 --warmups 0 --runtimes python bffsree
+	python3 -m unittest -v test_compare_bf_runtimes.py
+	python3 compare_bf_runtimes.py -n 1 --warmups 0 --timeout 10 \
+		--runtimes bffsree-checked bffsree-fast-word64 \
+		--workloads bfbench-simple go2bf-fib
 
 .PHONY: all debug release ref prof fast cell16 cell32 clean test metrics bench compare test-compare
 

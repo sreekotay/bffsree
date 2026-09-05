@@ -1,24 +1,30 @@
-# Plush-style cross-language comparison
+# Brainfuck runtime comparison
 
-This suite adds bffsree to a comparison shaped like the one in
-[Plush's New Register-Based Interpreter Is Insanely Fast][article].
-It runs matched programs under Plush, Python, Ruby, Lua, and Brainfuck,
-using 11 interleaved samples and the median process wall time.
+This suite compares one Brainfuck corpus across:
+
+- bffsree checked, fast word64, and unoptimized reference builds
+- [bf-cpp][bf-cpp]
+- [Tritium][tritium] in interpreter (`-r`) and default JIT modes
+
+It does not run high-level-language ports. This keeps the comparison on
+the same Brainfuck source and cell semantics.
 
 ## Workloads
 
-| workload | matched parameters | article parameters | expected output |
+The corpus contains the seven BFBench 1.4 programs in this repository
+and these generated programs:
+
+| workload | parameters | expected output |
 |---|---|---|---|
-| `fib` | naive recursive `fib(26)` | naive recursive `fib(38)` | `121393` |
-| `binary_tree` | depth 7, 100 traversals | depth 14, 2000 traversals | wrapping checksum `3264000` |
-| `mandelbrot` | 65x41, 20 iterations, signed 4-bit fixed point | new workload | 41-line ASCII image |
+| `fib` | naive recursive `fib(26)` | `121393` |
+| `binary_tree` | depth 7, 100 traversals | wrapping checksum `3264000` |
+| `mandelbrot` | 65x41, 20 iterations, signed 4-bit fixed point | 41-line ASCII image |
 
 The article's exact `fib(38)` was tested with the scalar fast
 interpreter, but did not complete in 60 seconds on the development
 machine. `fib(26)` takes about five seconds with scalar scans and about
 3.0 seconds with portable 64-bit stride-3 scans. Binary-tree parameters
-are reduced for the same reason. Every language uses the reduced
-parameters in this suite.
+are reduced for the same reason.
 
 Brainfuck has no functions, objects, or allocator. `fib.b` uses an
 explicit generated call stack and preserves the naive recursive
@@ -28,9 +34,8 @@ it does **not** measure allocation or object-field pointer chasing like
 the article's original benchmark. Results must not be presented as an
 apples-to-apples VM object-model comparison.
 
-Mandelbrot uses wrapping 8-bit fixed-point arithmetic in every language,
-matching the Brainfuck cell model. This is distinct from Plush's
-interactive 640x480 floating-point Mandelbrot example.
+Mandelbrot uses wrapping 8-bit fixed-point arithmetic. This is distinct
+from Plush's interactive 640x480 floating-point Mandelbrot example.
 
 ## Brainfuck source generation
 
@@ -52,34 +57,30 @@ go build -o go2bf .
   > /path/to/bffsree/comparison/programs/mandelbrot.b
 ```
 
-The Go files are compiler inputs, not additional benchmark runtimes.
-Generated Brainfuck uses only the standard eight instructions and
-8-bit wrapping cells.
+The Go files are compiler inputs, not benchmark runtimes. Generated
+Brainfuck uses only the standard eight instructions and 8-bit wrapping
+cells. The repository is public domain/MIT; go2bf is MIT licensed.
+BFBench 1.4 was already vendored by the project and retains its original
+attribution in `BFBench.py`.
 
 ## Measurement
 
 ```bash
-python3 compare_languages.py
-python3 compare_languages.py --require-all --json results.json
+python3 compare_bf_runtimes.py
+python3 compare_bf_runtimes.py --prepare --require-all --json results.json
 ```
 
-Each complete interpreter process is timed, including startup and output.
-Jobs are shuffled with a fixed seed for every round. Output is validated
-before measurement and after every timed run. The report uses Python as
-the relative-throughput baseline when Python is present and records all
-raw samples, runtime versions, build flags, workload parameters, and
-host information in JSON.
+`--prepare` clones and builds bf-cpp commit
+`a7c99b1c98d56534c77edb7c1fe47aae9975d00e` and Tritium commit
+`525d346c006ea30dfc847ae3b32ed44d44fa9925` below `.bench-build/`.
+Set `BF_CPP` or `TRITIUM` to use existing binaries instead.
 
-Because the scaled workloads finish in milliseconds in the high-level
-runtimes, their figures include a significant amount of process-startup
-time. The bffsree programs take seconds. These results are useful for
-end-to-end execution comparisons, but are not pure VM dispatch rates and
-should not be substituted for the article's exact `fib(38)` and
-depth-14 tree results.
-
-The original Plush `fib` and `binary_tree` sources are from commit
-`e83f5515`; the matched ports intentionally change only the documented
-parameters and binary-tree representation.
+Each complete process is timed, including startup and output. Jobs are
+shuffled with a fixed seed for every round. Output is validated before
+measurement and after every timed run. Raw samples, build commands,
+source revisions, skipped timeout pairs, and host information can be
+written to JSON. The default timeout is 30 seconds per process, so the
+reference interpreter is expected to time out on demanding programs.
 
 ## Portable 64-bit scan results
 
@@ -104,3 +105,5 @@ unaligned word load, so the experiment was removed.
 
 [article]: https://pointersgonewild.com/2026-09-02-plushs-new-register-based-interpreter/
 [go2bf]: https://github.com/itchyny/go2bf
+[bf-cpp]: https://github.com/jumbub/bf-cpp
+[tritium]: https://github.com/rdebath/Brainfuck
