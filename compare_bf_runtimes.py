@@ -44,25 +44,35 @@ class Workload:
 BF_BENCH = ROOT / "BFBench-1.4"
 GENERATED = ROOT / "comparison" / "programs"
 WORKLOADS = (
-    Workload("bfbench-mandelbrot", BF_BENCH / "mandelbrot.b",
-             expected_file=BF_BENCH / "mandelbrot.result"),
-    Workload("bfbench-factor", BF_BENCH / "factor.b",
-             expected=b"123456789123456789: 3 3 7 11 13 19 3607 3803 52579\n",
-             input_data=b"123456789123456789\n"),
-    Workload("bfbench-long", BF_BENCH / "long.b",
-             expected_file=BF_BENCH / "long.out"),
-    Workload("bfbench-golden", BF_BENCH / "golden.b",
-             expected=b"1.618033988749894848204586834365638117\n"),
-    Workload("bfbench-hanoi", BF_BENCH / "hanoi.b",
-             expected_file=BF_BENCH / "hanoi.out"),
-    Workload("bfbench-beer", BF_BENCH / "beer.b",
-             expected_file=BF_BENCH / "beer.out"),
+    Workload(
+        "bfbench-mandelbrot",
+        BF_BENCH / "mandelbrot.b",
+        expected_file=BF_BENCH / "mandelbrot.result",
+    ),
+    Workload(
+        "bfbench-factor",
+        BF_BENCH / "factor.b",
+        expected=b"123456789123456789: 3 3 7 11 13 19 3607 3803 52579\n",
+        input_data=b"123456789123456789\n",
+    ),
+    Workload("bfbench-long", BF_BENCH / "long.b", expected_file=BF_BENCH / "long.out"),
+    Workload(
+        "bfbench-golden",
+        BF_BENCH / "golden.b",
+        expected=b"1.618033988749894848204586834365638117\n",
+    ),
+    Workload(
+        "bfbench-hanoi", BF_BENCH / "hanoi.b", expected_file=BF_BENCH / "hanoi.out"
+    ),
+    Workload("bfbench-beer", BF_BENCH / "beer.b", expected_file=BF_BENCH / "beer.out"),
     Workload("bfbench-simple", BF_BENCH / "bench.b", expected=b"OK\n"),
     Workload("go2bf-fib", GENERATED / "fib.b", expected=b"121393\n"),
-    Workload("go2bf-binary-tree", GENERATED / "binary_tree.b",
-             expected=b"3264000\n"),
-    Workload("go2bf-mandelbrot", GENERATED / "mandelbrot.b",
-             expected_file=GENERATED / "mandelbrot.out"),
+    Workload("go2bf-binary-tree", GENERATED / "binary_tree.b", expected=b"3264000\n"),
+    Workload(
+        "go2bf-mandelbrot",
+        GENERATED / "mandelbrot.b",
+        expected_file=GENERATED / "mandelbrot.out",
+    ),
 )
 
 
@@ -86,11 +96,17 @@ def configured_runtimes() -> tuple[Runtime, ...]:
     tritium = RUNTIME_DIR / "tritium" / "tritium" / "bfi.out"
     return (
         Runtime("bffsree-checked", (str(BUILD_DIR / f"bffsree-checked{suffix}"),)),
-        Runtime("bffsree-fast-word64", (str(BUILD_DIR / f"bffsree-fast-word64{suffix}"),)),
+        Runtime(
+            "bffsree-fast-word64", (str(BUILD_DIR / f"bffsree-fast-word64{suffix}"),)
+        ),
         Runtime("bffsree-reference", (str(BUILD_DIR / f"bffsree-reference{suffix}"),)),
-        Runtime("bf-cpp", env_command(
-            "BF_CPP", RUNTIME_DIR / "bf-cpp" / "build" / "src" / "standalone" / "brainfuck"
-        )),
+        Runtime(
+            "bf-cpp",
+            env_command(
+                "BF_CPP",
+                RUNTIME_DIR / "bf-cpp" / "build" / "src" / "standalone" / "brainfuck",
+            ),
+        ),
         Runtime("tritium-interpreter", env_command("TRITIUM", tritium), ("-r",)),
         Runtime("tritium-jit", env_command("TRITIUM", tritium)),
     )
@@ -111,13 +127,22 @@ def prepare_external_runtimes() -> None:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     bf_cpp = RUNTIME_DIR / "bf-cpp"
     tritium = RUNTIME_DIR / "tritium"
-    cxx = os.environ.get("CXX", "g++")
+    cxx = os.environ.get("CXX") or "g++"
     checkout_source("https://github.com/jumbub/bf-cpp.git", BF_CPP_REV, bf_cpp)
     checkout_source("https://github.com/rdebath/Brainfuck.git", TRITIUM_REV, tritium)
-    run_checked((
-        "cmake", "-S", ".", "-B", "build", "-DCMAKE_BUILD_TYPE=Release",
-        "-DCMAKE_CXX_STANDARD=23", f"-DCMAKE_CXX_COMPILER={cxx}",
-    ), bf_cpp)
+    run_checked(
+        (
+            "cmake",
+            "-S",
+            ".",
+            "-B",
+            "build",
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DCMAKE_CXX_STANDARD=23",
+            f"-DCMAKE_CXX_COMPILER={cxx}",
+        ),
+        bf_cpp,
+    )
     run_checked(("cmake", "--build", "build", "--target", "standalone", "-j2"), bf_cpp)
     run_checked(("make", "-C", "tritium", "-j2"), tritium)
 
@@ -126,19 +151,29 @@ def build_bffsree() -> dict[str, list[str]]:
     BUILD_DIR.mkdir(exist_ok=True)
     compiler = shlex.split(os.environ.get("CC", "cc"))
     common = compiler + [
-        "-Wall", "-Wextra", "-O3", "-DNDEBUG",
-        "-DBF_CELL_BITS=8", "-DBF_CELL_SIGNED=0", "-DBF_OP_BUF_BITS=16",
+        "-Wall",
+        "-Wextra",
+        "-O3",
+        "-DNDEBUG",
+        "-DBF_CELL_BITS=8",
+        "-DBF_CELL_SIGNED=0",
+        "-DBF_OP_BUF_BITS=16",
     ]
     commands = {
-        "bffsree-checked": common + [
-            "-o", str(BUILD_DIR / "bffsree-checked"), str(ROOT / "main.c")
-        ],
-        "bffsree-fast-word64": common + [
-            "-DBF_FAST=1", "-o", str(BUILD_DIR / "bffsree-fast-word64"),
+        "bffsree-checked": common
+        + ["-o", str(BUILD_DIR / "bffsree-checked"), str(ROOT / "main.c")],
+        "bffsree-fast-word64": common
+        + [
+            "-DBF_FAST=1",
+            "-o",
+            str(BUILD_DIR / "bffsree-fast-word64"),
             str(ROOT / "main.c"),
         ],
-        "bffsree-reference": common + [
-            "-D_refInterp=1", "-o", str(BUILD_DIR / "bffsree-reference"),
+        "bffsree-reference": common
+        + [
+            "-D_refInterp=1",
+            "-o",
+            str(BUILD_DIR / "bffsree-reference"),
             str(ROOT / "main.c"),
         ],
     }
@@ -152,7 +187,9 @@ def executable_available(runtime: Runtime) -> bool:
     return Path(executable).is_file() or shutil.which(executable) is not None
 
 
-def select_runtimes(names: Sequence[str] | None, require_all: bool) -> tuple[Runtime, ...]:
+def select_runtimes(
+    names: Sequence[str] | None, require_all: bool
+) -> tuple[Runtime, ...]:
     requested = set(names or (runtime.name for runtime in configured_runtimes()))
     selected, missing = [], []
     for runtime in configured_runtimes():
@@ -161,10 +198,14 @@ def select_runtimes(names: Sequence[str] | None, require_all: bool) -> tuple[Run
         (selected if executable_available(runtime) else missing).append(runtime)
     if missing and (require_all or names):
         variables = " (set BF_CPP or TRITIUM to override executable paths)"
-        raise RuntimeError("missing runtime(s): " + ", ".join(r.name for r in missing) + variables)
+        raise RuntimeError(
+            "missing runtime(s): " + ", ".join(r.name for r in missing) + variables
+        )
     if missing:
-        print("Skipping unavailable runtime(s): " + ", ".join(r.name for r in missing),
-              file=sys.stderr)
+        print(
+            "Skipping unavailable runtime(s): " + ", ".join(r.name for r in missing),
+            file=sys.stderr,
+        )
     if not selected:
         raise RuntimeError("no benchmark runtimes are available")
     return tuple(selected)
@@ -174,7 +215,9 @@ def normalize_output(data: bytes) -> bytes:
     return data.replace(b"\r\n", b"\n").replace(b"\r", b"\n").rstrip(b"\n")
 
 
-def run_once(runtime: Runtime, workload: Workload, timeout: float) -> tuple[float, bytes]:
+def run_once(
+    runtime: Runtime, workload: Workload, timeout: float
+) -> tuple[float, bytes]:
     start = time.perf_counter()
     result = subprocess.run(
         runtime.invocation(workload),
@@ -226,7 +269,9 @@ def collect_samples(
                     verify_output(runtime, workload, output)
                 active.add((runtime.name, workload.name))
             except subprocess.TimeoutExpired:
-                skipped[workload.name][runtime.name] = f"validation timeout after {timeout:g}s"
+                skipped[workload.name][runtime.name] = (
+                    f"validation timeout after {timeout:g}s"
+                )
 
     jobs = [
         (runtime, workload)
@@ -244,7 +289,9 @@ def collect_samples(
                 verify_output(runtime, workload, output)
                 samples[workload.name][runtime.name].append(elapsed)
             except subprocess.TimeoutExpired:
-                skipped[workload.name][runtime.name] = f"timed run timeout after {timeout:g}s"
+                skipped[workload.name][runtime.name] = (
+                    f"timed run timeout after {timeout:g}s"
+                )
         print(f"  round {round_index + 1}/{runs}", flush=True)
     return samples, skipped
 
@@ -261,7 +308,8 @@ def summarize(
         row = {
             runtime.name: (
                 statistics.median(samples[workload.name][runtime.name])
-                if samples[workload.name][runtime.name] else None
+                if samples[workload.name][runtime.name]
+                else None
             )
             for runtime in runtimes
         }
@@ -292,7 +340,8 @@ def print_summary(
     print(f"{'workload':>23}", *(f"{r.name:>23}" for r in runtimes))
     for workload in workloads:
         values = [
-            "timeout".rjust(23) if medians[workload.name][runtime.name] is None
+            "timeout".rjust(23)
+            if medians[workload.name][runtime.name] is None
             else f"{medians[workload.name][runtime.name]:23.6f}"
             for runtime in runtimes
         ]
@@ -316,8 +365,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=20260905)
     parser.add_argument("--runtimes", nargs="+", choices=runtime_names)
     parser.add_argument("--workloads", nargs="+", choices=workload_names)
-    parser.add_argument("--prepare", action="store_true",
-                        help="clone pinned bf-cpp and Tritium sources and build them")
+    parser.add_argument(
+        "--prepare",
+        action="store_true",
+        help="clone pinned bf-cpp and Tritium sources and build them",
+    )
     parser.add_argument("--require-all", action="store_true")
     parser.add_argument("--json", type=Path)
     args = parser.parse_args()
