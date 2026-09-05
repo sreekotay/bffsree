@@ -17,20 +17,21 @@ https://esolangs.org/wiki/Brainfuck_speed_test
 
 ## How fast?
 
-Seconds, best of 7 interleaved runs, Linux x86-64 (gcc 13, same box, same day):
+Median seconds over 7 interleaved, output-validated runs, Linux x86-64
+(bffsree/bf-cpp: GCC 13; Tritium: Clang 18):
 
 | | mandelbrot | long | hanoi | factor | golden | **total** |
 |---|---|---|---|---|---|---|
-| **bffsree** (default) | 1.18 | 0.06 | 0.013 | 0.35 | 0.013 | **1.61** |
-| **bffsree** (`make fast`) | 1.14 | 0.06 | 0.009 | 0.31 | 0.013 | **1.54** |
-| [bf-cpp](https://github.com/jumbub/bf-cpp) | 1.31 | 0.35 | 0.070 | 0.29 | 0.014 | 2.04 |
-| [tritium](https://github.com/rdebath/Brainfuck) `-r` (interpreter) | 1.94 | 0.05 | 0.023 | 0.44 | 0.018 | 2.48 |
-| tritium JIT (reference, not an interpreter) | 0.43 | 0.006 | 0.015 | 0.07 | 0.009 | 0.54 |
+| **bffsree** (default) | 1.018 | 0.055 | 0.010 | 0.335 | 0.010 | **1.428** |
+| **bffsree** (`make fast`) | 0.982 | 0.046 | 0.009 | 0.293 | 0.010 | **1.340** |
+| [bf-cpp](https://github.com/jumbub/bf-cpp) | 0.956 | 0.431 | 0.091 | 0.275 | 0.010 | 1.762 |
+| [tritium](https://github.com/rdebath/Brainfuck) `-r` (interpreter) | 1.728 | 0.053 | 0.019 | 0.415 | 0.013 | 2.228 |
+| tritium JIT (reference, not an interpreter) | 0.359 | 0.006 | 0.012 | 0.064 | 0.007 | 0.447 |
 
-Mandelbrot is a dead heat with bf-cpp (within run-to-run noise); the
-overall margin comes from loop collapse (`long`, `hanoi` run ~6x
-faster). The JIT row is the compile-to-native ceiling, included for
-scale — bffsree still beats it on `hanoi`.
+Mandelbrot remains close to bf-cpp; bffsree's overall margin comes from
+loop collapse (`long` and `hanoi` run about 9x and 11x faster). The JIT
+row is the compile-to-native ceiling, included for scale — bffsree still
+beats it on `hanoi`.
 
 ## Features
 
