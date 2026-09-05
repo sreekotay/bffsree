@@ -111,11 +111,12 @@ def prepare_external_runtimes() -> None:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     bf_cpp = RUNTIME_DIR / "bf-cpp"
     tritium = RUNTIME_DIR / "tritium"
+    cxx = os.environ.get("CXX", "g++")
     checkout_source("https://github.com/jumbub/bf-cpp.git", BF_CPP_REV, bf_cpp)
     checkout_source("https://github.com/rdebath/Brainfuck.git", TRITIUM_REV, tritium)
     run_checked((
         "cmake", "-S", ".", "-B", "build", "-DCMAKE_BUILD_TYPE=Release",
-        "-DCMAKE_CXX_STANDARD=23",
+        "-DCMAKE_CXX_STANDARD=23", f"-DCMAKE_CXX_COMPILER={cxx}",
     ), bf_cpp)
     run_checked(("cmake", "--build", "build", "--target", "standalone", "-j2"), bf_cpp)
     run_checked(("make", "-C", "tritium", "-j2"), tritium)
