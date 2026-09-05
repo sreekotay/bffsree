@@ -102,6 +102,91 @@ static bf_cell* bf_word_scan3_backward(bf_cell* p) {
 #define BF_WORD_SCAN3 0
 #endif
 
+#if !_refInterp
+#if !BF_PROFILE
+// Tight walking copy: dest += src; src = 0. Used for the mandelbrot
+// 9-cell frame slides that dominate MZSCAN.
+static bf_cell* bf_mzscan_copy(bf_cell* p, int foff, int dest, int boff) {
+    if (*p) {
+        p += foff;
+        for (;;) {
+            bf_cell v = *p;
+            *p = 0;
+            p[dest] += v;
+            p += boff;
+            if (*p == 0) break;
+            p += foff;
+        }
+    }
+    return p;
+}
+
+static bf_cell* bf_mzscan_copy9_from1(bf_cell* p) {
+    if (*p) {
+        p += 1;
+        for (;;) {
+            bf_cell v = *p;
+            *p = 0;
+            p[9] += v;
+            p -= 10;
+            if (*p == 0) break;
+            p += 1;
+        }
+    }
+    return p;
+}
+
+static bf_cell* bf_mzscan_copy9_from2(bf_cell* p) {
+    if (*p) {
+        p += 2;
+        for (;;) {
+            bf_cell v = *p;
+            *p = 0;
+            p[9] += v;
+            p -= 11;
+            if (*p == 0) break;
+            p += 2;
+        }
+    }
+    return p;
+}
+#endif
+
+// Hottest LOOPRUN shape on mandelbrot: decrement/walk, then
+// VAL_MZ, VAL_MUL, VAL_MZ, VAL. Straight-line, no inner switch.
+static bf_cell* bf_looprun_mz_mul_mz_val(
+    bf_cell* p,
+    bf_cell fbuf, int foff,
+    int a_buf, int a_off,
+    int b_buf, int b_off,
+    int c_buf, int c_off,
+    bf_cell add, int d_off)
+{
+    if (*p) {
+        *p += fbuf;
+        p += foff;
+        for (;;) {
+            bf_cell v = *p;
+            *p = 0;
+            p[a_buf] += v;
+            p += a_off;
+            p[b_buf] += *p;
+            p += b_off;
+            v = *p;
+            *p = 0;
+            p[c_buf] += v;
+            p += c_off;
+            *p += add;
+            p += d_off;
+            if (*p == 0) break;
+            *p += fbuf;
+            p += foff;
+        }
+    }
+    return p;
+}
+#endif
+
 // =====================================================================
 // main VM loop for bfi
 // =====================================================================
@@ -232,40 +317,75 @@ DONE:
             (P) += 2; \
             ptr[sp] += (bf_cell)(P)->buf; \
         } while (0)
-    #define _op_MZSCAN(P)   _op_SCANLOOP(P, ptr[sp + (P)[1].buf] += (bf_cell)((P)[1].val * ptr[sp]); \
-                                            ptr[sp] = 0)
     #define _op_VALSCAN(P)  _op_SCANLOOP(P, ptr[sp] += (bf_cell)(P)[1].val)
 
-    // LOOPRUN: a walking loop whose straight-line arithmetic body is
-    // interpreted internally, reusing the op bodies above (body and
-    // ']' stay in place; same FWD/REW semantics and sentinel-pad exit
-    // rules as the scans)
+#if BF_PROFILE
+    #define _op_MZSCAN(P)   _op_SCANLOOP(P, ptr[sp + (P)[1].buf] += (bf_cell)((P)[1].val * ptr[sp]); \
+                                            ptr[sp] = 0)
+#else
+    #define _op_MZSCAN(P) \
+        do { \
+            if ((P)->buf == 0 && (P)[1].val == 1) { \
+                tp = ptr + sp; \
+                if ((P)->off == 1 && (P)[1].buf == 9 && (P)[1].off == -10) \
+                    tp = bf_mzscan_copy9_from1(tp); \
+                else if ((P)->off == 2 && (P)[1].buf == 9 && (P)[1].off == -11) \
+                    tp = bf_mzscan_copy9_from2(tp); \
+                else \
+                    tp = bf_mzscan_copy(tp, (P)->off, (P)[1].buf, (P)[1].off); \
+                sp = (int)(tp - ptr); \
+                if (_mybounds(sp, ptrLen)) goto ERROR_BF; \
+                (P) += 2; \
+                ptr[sp] += (bf_cell)(P)->buf; \
+            } else { \
+                _op_SCANLOOP(P, ptr[sp + (P)[1].buf] += (bf_cell)((P)[1].val * ptr[sp]); \
+                                 ptr[sp] = 0); \
+            } \
+        } while (0)
+#endif
+
+    // LOOPRUN: walking arithmetic body, interpreted internally.
+    // Sentinel pads let a walk leave the logical tape; one post-loop
+    // bounds check matches MZSCAN. The mandelbrot 4-op copy-walk is
+    // specialized; other bodies still switch, but on a tape pointer.
     #define _op_LOOPRUN(P) \
         do { \
             bf_op* br = (P) + (P)->val; \
             bf_op* b; \
-            if (ptr[sp] != 0) { \
-                ptr[sp] += (bf_cell)(P)->buf; \
-                sp += (P)->off; \
+            if ((P)->val == 5 && \
+                (P)[1].cmd == bfo_VAL_MZ && (P)[1].val == 1 && \
+                (P)[2].cmd == bfo_VAL_MUL && (P)[2].val == 1 && \
+                (P)[3].cmd == bfo_VAL_MZ && (P)[3].val == 1 && \
+                (P)[4].cmd == bfo_VAL) { \
+                tp = bf_looprun_mz_mul_mz_val( \
+                    ptr + sp, (bf_cell)(P)->buf, (P)->off, \
+                    (P)[1].buf, (P)[1].off, (P)[2].buf, (P)[2].off, \
+                    (P)[3].buf, (P)[3].off, (bf_cell)(P)[4].val, (P)[4].off); \
+                sp = (int)(tp - ptr); \
+            } else if (ptr[sp] != 0) { \
+                tp = ptr + sp; \
+                *tp += (bf_cell)(P)->buf; \
+                tp += (P)->off; \
                 for (;;) { \
                     for (b = (P) + 1; b != br; b++) { \
-                        if (_mybounds(sp, ptrLen)) goto ERROR_BF; \
                         switch (b->cmd) { \
-                        case bfo_VAL:      _op_VAL(b);      break; \
-                        case bfo_VAL_MZ:   _op_VAL_MZ(b);   break; \
-                        case bfo_VAL_MUL:  _op_VAL_MUL(b);  break; \
-                        case bfo_VAL_ZERO: _op_VAL_ZERO(b); break; \
-                        case bfo_MUL_MUL:  _op_MUL_MUL(b);  break; \
+                        case bfo_VAL:      *tp += (bf_cell)b->val; break; \
+                        case bfo_VAL_MZ:   tp[b->buf] += (bf_cell)(b->val * *tp); \
+                                           *tp = 0; break; \
+                        case bfo_VAL_MUL:  tp[b->buf] += (bf_cell)(b->val * *tp); break; \
+                        case bfo_VAL_ZERO: *tp = (bf_cell)b->val; break; \
+                        case bfo_MUL_MUL:  tp[b->buf] *= (bf_cell)(b->val * *tp); break; \
                         } \
-                        sp += b->off; \
+                        tp += b->off; \
                     } \
-                    if (_mybounds(sp, ptrLen)) goto ERROR_BF; \
-                    if (ptr[sp] == 0) break; \
+                    if (*tp == 0) break; \
                     _bf_prof(P); \
-                    ptr[sp] += (bf_cell)(P)->buf; \
-                    sp += (P)->off; \
+                    *tp += (bf_cell)(P)->buf; \
+                    tp += (P)->off; \
                 } \
+                sp = (int)(tp - ptr); \
             } \
+            if (_mybounds(sp, ptrLen)) goto ERROR_BF; \
             (P) = br; \
             ptr[sp] += (bf_cell)(P)->buf; \
         } while (0)
