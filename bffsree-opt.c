@@ -284,6 +284,69 @@ static void bf_markLoopRuns(bf_op* bfo, int pc) {
     }
 }
 
+// Bosman-style 9-cell mandelbrot kernels. PIXELSTEP is the repeated
+// FWD-19 pixel body plus the FWD-11 digit walk that always follows it.
+// DIGITSTEP is a leftover FWD-11 nest. Parameter blocks stay in place;
+// only the header opcode changes. Skip when profiling so the histogram
+// still names the inner MZSCAN / LOOPRUN / PTR_S sites.
+#if !BF_PROFILE
+static int bf_match_pixel19(const bf_op* P) {
+    return P[0].cmd == bfo_FWD && P[0].val == 19 &&
+           P[1].cmd == bfo_VAL &&
+           P[2].cmd == bfo_VAL_MZ &&
+           P[3].cmd == bfo_FWD && P[3].val == 9 &&
+           P[4].cmd == bfo_VAL &&
+           P[5].cmd == bfo_LOOPRUN && P[5].val == 5 &&
+           P[6].cmd == bfo_VAL_MZ &&
+           P[7].cmd == bfo_VAL_MUL &&
+           P[8].cmd == bfo_VAL_MZ &&
+           P[9].cmd == bfo_VAL &&
+           P[10].cmd == bfo_REW &&
+           P[11].cmd == bfo_PTR_S &&
+           P[12].cmd == bfo_REW &&
+           P[13].cmd == bfo_PTR_S &&
+           P[14].cmd == bfo_MZSCAN && P[14].val == 2 &&
+           P[15].cmd == bfo_VAL_MZ &&
+           P[16].cmd == bfo_REW &&
+           P[17].cmd == bfo_VAL_MZ &&
+           P[18].cmd == bfo_VAL &&
+           P[19].cmd == bfo_REW;
+}
+
+static int bf_match_digit11(const bf_op* P) {
+    return P[0].cmd == bfo_FWD && P[0].val == 11 &&
+           P[1].cmd == bfo_VAL_ZERO &&
+           P[2].cmd == bfo_VAL &&
+           P[3].cmd == bfo_LOOPRUN && P[3].val == 5 &&
+           P[4].cmd == bfo_VAL &&
+           P[5].cmd == bfo_VAL_MUL &&
+           P[6].cmd == bfo_VAL_MZ &&
+           P[7].cmd == bfo_VAL_MZ &&
+           P[8].cmd == bfo_REW &&
+           P[9].cmd == bfo_VAL_MZ &&
+           P[10].cmd == bfo_VAL &&
+           P[11].cmd == bfo_REW;
+}
+
+static void bf_markPixelKernels(bf_op* bfo, int pc) {
+    int i;
+
+    for (i = 0; i + 31 < pc; i++) {
+        if (bf_match_pixel19(bfo + i) && bf_match_digit11(bfo + i + 20)) {
+            bfo[i].cmd = bfo_PIXELSTEP;
+            bfo[i].val = 31; /* land on the FWD-11 REW */
+            i += 31;
+        }
+    }
+    for (i = 0; i + 11 < pc; i++) {
+        if (i >= 20 && bfo[i - 20].cmd == bfo_PIXELSTEP)
+            continue;
+        if (bfo[i].cmd == bfo_FWD && bf_match_digit11(bfo + i))
+            bfo[i].cmd = bfo_DIGITSTEP;
+    }
+}
+#endif
+
 // ----------------------------
 // Program optimization
 // ----------------------------
@@ -384,6 +447,9 @@ int bf_Optimize(void** bfoptr, char* chars, int proglen, int printMetrics) {
 
     pc = bf_foldNoops(bfo, pc);
     bf_markLoopRuns(bfo, pc);
+#if !BF_PROFILE
+    bf_markPixelKernels(bfo, pc);
+#endif
 
     if (printMetrics) {
         printf("//-- Optimization: Instructions [%d -> %d] using Bytes [%d -> %d] (op=%d bytes)\n",

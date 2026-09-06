@@ -109,7 +109,6 @@ static bf_cell* bf_word_scan3_backward(bf_cell* p) {
 #define BF_NOINLINE
 #endif
 
-#if !BF_PROFILE
 // Out of line so the computed-goto Eval stays small. Inlining these
 // into Eval changes register allocation for every opcode, including
 // PTR_S, and that made BF_FAST slower than the checked build.
@@ -157,7 +156,6 @@ static BF_NOINLINE bf_cell* bf_mzscan_copy9_from2(bf_cell* p) {
     }
     return p;
 }
-#endif
 
 // Hottest LOOPRUN shape on mandelbrot: decrement/walk, then
 // VAL_MZ, VAL_MUL, VAL_MZ, VAL. Straight-line, no inner switch.
@@ -227,6 +225,184 @@ static BF_NOINLINE bf_cell* bf_apply_ptr_s(bf_cell* p, int stride) {
     if (stride == -3) return bf_word_scan3_backward(p);
 #endif
     while (*p) p += stride;
+    return p;
+}
+
+// Second mandelbrot LOOPRUN: VAL, VAL_MUL, VAL_MZ, VAL_MZ. Used by
+// the FWD-11 digit walk (PIXELSTEP / DIGITSTEP).
+static BF_NOINLINE bf_cell* bf_looprun_val_mul_mz_mz(
+    bf_cell* p,
+    bf_cell fbuf, int foff,
+    bf_cell add, int a_off,
+    int b_val, int b_buf, int b_off,
+    int c_val, int c_buf, int c_off,
+    int d_val, int d_buf, int d_off)
+{
+    if (*p) {
+        *p += fbuf;
+        p += foff;
+        for (;;) {
+            *p += add;
+            p += a_off;
+            p[b_buf] += (bf_cell)(b_val * *p);
+            p += b_off;
+            p[c_buf] += (bf_cell)(c_val * *p);
+            *p = 0;
+            p += c_off;
+            p[d_buf] += (bf_cell)(d_val * *p);
+            *p = 0;
+            p += d_off;
+            if (*p == 0) break;
+            *p += fbuf;
+            p += foff;
+        }
+    }
+    return p;
+}
+
+static inline bf_cell* bf_apply_rew(bf_cell* p, const bf_op* rew) {
+    *p += (bf_cell)rew->buf;
+    return p + rew->off;
+}
+
+static inline bf_cell* bf_run_looprun(bf_cell* p, bf_op* L) {
+    if (L->val == 5 &&
+        L[1].cmd == bfo_VAL_MZ && L[1].val == 1 &&
+        L[2].cmd == bfo_VAL_MUL && L[2].val == 1 &&
+        L[3].cmd == bfo_VAL_MZ && L[3].val == 1 &&
+        L[4].cmd == bfo_VAL) {
+        p = bf_looprun_mz_mul_mz_val(
+            p, (bf_cell)L->buf, L->off,
+            L[1].buf, L[1].off, L[2].buf, L[2].off,
+            L[3].buf, L[3].off, (bf_cell)L[4].val, L[4].off);
+    } else if (L->val == 5 &&
+               L[1].cmd == bfo_VAL &&
+               L[2].cmd == bfo_VAL_MUL &&
+               L[3].cmd == bfo_VAL_MZ &&
+               L[4].cmd == bfo_VAL_MZ) {
+        p = bf_looprun_val_mul_mz_mz(
+            p, (bf_cell)L->buf, L->off,
+            (bf_cell)L[1].val, L[1].off,
+            L[2].val, L[2].buf, L[2].off,
+            L[3].val, L[3].buf, L[3].off,
+            L[4].val, L[4].buf, L[4].off);
+    } else {
+        p = bf_looprun_generic(p, L);
+    }
+    return bf_apply_rew(p, L + L->val);
+}
+
+static inline bf_cell* bf_run_mzscan(bf_cell* p, bf_op* M) {
+    if (M->off == 1 && M[1].buf == 9 && M[1].off == -10)
+        p = bf_mzscan_copy9_from1(p);
+    else if (M->off == 2 && M[1].buf == 9 && M[1].off == -11)
+        p = bf_mzscan_copy9_from2(p);
+    else
+        p = bf_mzscan_copy(p, M->off, M[1].buf, M[1].off);
+    return bf_apply_rew(p, M + 2);
+}
+
+static inline bf_cell* bf_run_ptr_s(bf_cell* p, const bf_op* o) {
+    int stride = o->val;
+    while (*p) p += stride;
+    return p + o->off;
+}
+
+// FWD-11 digit walk on a 9-cell frame: zero/dec, then the 4-op
+// VAL / VAL_MUL / VAL_MZ / VAL_MZ copy-walk, then a pair of stores.
+static inline bf_cell* bf_digit11_body(bf_cell* p, bf_op* P) {
+    *p = (bf_cell)P[1].val;
+    p += P[1].off;
+    *p += (bf_cell)P[2].val;
+    p += P[2].off;
+    p = bf_run_looprun(p, P + 3);
+    p[P[9].buf] += (bf_cell)(P[9].val * *p);
+    *p = 0;
+    p += P[9].off;
+    *p += (bf_cell)P[10].val;
+    return p + P[10].off;
+}
+
+// FWD-19 pixel body: one 9-cell lane of the escape-time kernel.
+// Nested FWD-9 walks frames with LOOPRUN + stride-9 scans, then
+// slides the lane into the next 9-cell record.
+static inline bf_cell* bf_pixel19_body(bf_cell* p, bf_op* P) {
+    bf_op* inner = P + 3;
+
+    *p += (bf_cell)P[1].val;
+    p += P[1].off;
+    p[P[2].buf] += (bf_cell)(P[2].val * *p);
+    *p = 0;
+    p += P[2].off;
+
+    if (*p) {
+        *p += (bf_cell)inner->buf;
+        p += inner->off;
+        for (;;) {
+            *p += (bf_cell)P[4].val;
+            p += P[4].off;
+            p = bf_run_looprun(p, P + 5);
+            p = bf_run_ptr_s(p, P + 11);
+            if (*p == 0) {
+                p = bf_apply_rew(p, P + 12);
+                break;
+            }
+            *p += (bf_cell)inner->buf;
+            p += inner->off;
+        }
+    } else {
+        p = bf_apply_rew(p, P + 12);
+    }
+
+    p = bf_run_ptr_s(p, P + 13);
+    p = bf_run_mzscan(p, P + 14);
+    p[P[17].buf] += (bf_cell)(P[17].val * *p);
+    *p = 0;
+    p += P[17].off;
+    *p += (bf_cell)P[18].val;
+    return p + P[18].off;
+}
+
+// Standalone FWD-11. Returns the pointer on the REW test cell so
+// Eval can apply REW.buf / REW.off, matching LOOPRUN.
+static BF_NOINLINE bf_cell* bf_digitstep(bf_cell* p, bf_op* P) {
+    if (*p) {
+        *p += (bf_cell)P->buf;
+        p += P->off;
+        for (;;) {
+            p = bf_digit11_body(p, P);
+            if (*p == 0) break;
+            *p += (bf_cell)P->buf;
+            p += P->off;
+        }
+    }
+    return p;
+}
+
+// Fused FWD-19 + following FWD-11. Applies the FWD-19 REW itself,
+// then runs the digit walk and leaves Eval on the FWD-11 REW.
+static BF_NOINLINE bf_cell* bf_pixelstep(bf_cell* p, bf_op* P) {
+    if (*p) {
+        *p += (bf_cell)P->buf;
+        p += P->off;
+        for (;;) {
+            p = bf_pixel19_body(p, P);
+            if (*p == 0) break;
+            *p += (bf_cell)P->buf;
+            p += P->off;
+        }
+    }
+    p = bf_apply_rew(p, P + 19);
+    if (*p) {
+        *p += (bf_cell)P[20].buf;
+        p += P[20].off;
+        for (;;) {
+            p = bf_digit11_body(p, P + 20);
+            if (*p == 0) break;
+            *p += (bf_cell)P[20].buf;
+            p += P[20].off;
+        }
+    }
     return p;
 }
 #endif
@@ -404,9 +580,39 @@ DONE:
                     ptr + sp, (bf_cell)(P)->buf, (P)->off, \
                     (P)[1].buf, (P)[1].off, (P)[2].buf, (P)[2].off, \
                     (P)[3].buf, (P)[3].off, (bf_cell)(P)[4].val, (P)[4].off); \
+            } else if ((P)->val == 5 && \
+                       (P)[1].cmd == bfo_VAL && \
+                       (P)[2].cmd == bfo_VAL_MUL && \
+                       (P)[3].cmd == bfo_VAL_MZ && \
+                       (P)[4].cmd == bfo_VAL_MZ) { \
+                tp = bf_looprun_val_mul_mz_mz( \
+                    ptr + sp, (bf_cell)(P)->buf, (P)->off, \
+                    (bf_cell)(P)[1].val, (P)[1].off, \
+                    (P)[2].val, (P)[2].buf, (P)[2].off, \
+                    (P)[3].val, (P)[3].buf, (P)[3].off, \
+                    (P)[4].val, (P)[4].buf, (P)[4].off); \
             } else { \
                 tp = bf_looprun_generic(ptr + sp, (P)); \
             } \
+            sp = (int)(tp - ptr); \
+            _bf_bound_sp(); \
+            (P) += (P)->val; \
+            ptr[sp] += (bf_cell)(P)->buf; \
+        } while (0)
+
+    // PIXELSTEP / DIGITSTEP: 9-cell mandelbrot kernels. The walk lives
+    // in a noinline helper so computed-goto Eval stays small.
+    #define _op_PIXELSTEP(P) \
+        do { \
+            tp = bf_pixelstep(ptr + sp, (P)); \
+            sp = (int)(tp - ptr); \
+            _bf_bound_sp(); \
+            (P) += (P)->val; \
+            ptr[sp] += (bf_cell)(P)->buf; \
+        } while (0)
+    #define _op_DIGITSTEP(P) \
+        do { \
+            tp = bf_digitstep(ptr + sp, (P)); \
             sp = (int)(tp - ptr); \
             _bf_bound_sp(); \
             (P) += (P)->val; \
