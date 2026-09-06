@@ -47,6 +47,8 @@ with a timeout.
   - 9-cell tape frames: lane slides to offset 9 and +9 copy/mul walks
     keep the current frame in registers, then hop a whole record
   - Walking loops with arithmetic bodies → single-op internal loops
+  - Bounded-window `LOOPRUN`: if a body only touches ≤8 cells, load that
+    window, do the arithmetic, store, hop (any hop, not just 9)
   - Portable 64-bit acceleration for stride-3 scans in generated BF
   - Pointer movement fused into every op (`off` field)
 - **Threaded dispatch**: computed-goto on GCC/Clang, switch elsewhere (`-DBF_USE_CGOTO=0/1`)
