@@ -275,6 +275,36 @@ static BF_NOINLINE bf_cell* bf_looprun_generic(bf_cell* p, bf_op* P) {
     return bf_exec_fwd(p, P);
 }
 
+int bf_looprun_variant(const bf_op* L) {
+    if (L->val == 5 &&
+        L[1].cmd == bfo_VAL_MZ && L[1].val == 1 &&
+        L[2].cmd == bfo_VAL_MUL && L[2].val == 1 &&
+        L[3].cmd == bfo_VAL_MZ && L[3].val == 1 &&
+        L[4].cmd == bfo_VAL)
+        return BF_SEG_LOOPRUN_MZ_MUL_MZ_VAL;
+    if (L->val == 5 &&
+        L[1].cmd == bfo_VAL &&
+        L[2].cmd == bfo_VAL_MUL &&
+        L[3].cmd == bfo_VAL_MZ &&
+        L[4].cmd == bfo_VAL_MZ)
+        return BF_SEG_LOOPRUN_VAL_MUL_MZ_MZ;
+#if BF_AFFINE && BF_AFFINE_APPLY
+    if (L->aux) {
+        const bf_affine* m = bf_affine_get(L->aux);
+        if (m) {
+            switch (m->kind) {
+            case BF_AFF_S1:  return BF_SEG_LOOPRUN_AFF_S1;
+            case BF_AFF_S2Z: return BF_SEG_LOOPRUN_AFF_S2Z;
+            case BF_AFF_S2:  return BF_SEG_LOOPRUN_AFF_S2;
+            case BF_AFF_S3:  return BF_SEG_LOOPRUN_AFF_S3;
+            default: break;
+            }
+        }
+    }
+#endif
+    return BF_SEG_LOOPRUN;
+}
+
 // Own translation-unit-style clone of PTR_S: the stride scan must not
 // share registers with computed-goto dispatch. Fib/tree spend almost
 // all their time here.
@@ -442,24 +472,35 @@ static BF_NOINLINE bf_cell* bf_aff_walk_s3(
 }
 #endif
 
-static inline bf_cell* bf_looprun_rest(bf_cell* p, bf_op* L) {
+// Run a LOOPRUN whose cell is known nonzero, by pre-decoded variant.
+// Stops at the failed loop test; the caller applies the REW slot.
+static inline bf_cell* bf_looprun_taken(bf_cell* p, bf_op* L, int variant) {
+    switch (variant) {
+    case BF_SEG_LOOPRUN_MZ_MUL_MZ_VAL:
+        return bf_looprun_mz_mul_mz_val(
+            p, (bf_cell)L->buf, L->off,
+            L[1].buf, L[1].off, L[2].buf, L[2].off,
+            L[3].buf, L[3].off, (bf_cell)L[4].val, L[4].off);
+    case BF_SEG_LOOPRUN_VAL_MUL_MZ_MZ:
+        return bf_looprun_val_mul_mz_mz(
+            p, (bf_cell)L->buf, L->off,
+            (bf_cell)L[1].val, L[1].off,
+            L[2].val, L[2].buf, L[2].off,
+            L[3].val, L[3].buf, L[3].off,
+            L[4].val, L[4].buf, L[4].off);
 #if BF_AFFINE && BF_AFFINE_APPLY
-    if (L->aux) {
-        const bf_affine* am = bf_affine_get(L->aux);
-        if (am) {
-            bf_cell fbuf = (bf_cell)L->buf;
-            int foff = L->off;
-            switch (am->kind) {
-            case BF_AFF_S1:  return bf_aff_walk_s1(p, fbuf, foff, am);
-            case BF_AFF_S2Z: return bf_aff_walk_s2z(p, fbuf, foff, am);
-            case BF_AFF_S2:  return bf_aff_walk_s2(p, fbuf, foff, am);
-            case BF_AFF_S3:  return bf_aff_walk_s3(p, fbuf, foff, am);
-            default: break;
-            }
-        }
-    }
+    case BF_SEG_LOOPRUN_AFF_S1:
+        return bf_aff_walk_s1(p, (bf_cell)L->buf, L->off, bf_affine_get(L->aux));
+    case BF_SEG_LOOPRUN_AFF_S2Z:
+        return bf_aff_walk_s2z(p, (bf_cell)L->buf, L->off, bf_affine_get(L->aux));
+    case BF_SEG_LOOPRUN_AFF_S2:
+        return bf_aff_walk_s2(p, (bf_cell)L->buf, L->off, bf_affine_get(L->aux));
+    case BF_SEG_LOOPRUN_AFF_S3:
+        return bf_aff_walk_s3(p, (bf_cell)L->buf, L->off, bf_affine_get(L->aux));
 #endif
-    return bf_looprun_generic(p, L);
+    default:
+        return bf_looprun_generic(p, L);
+    }
 }
 #endif
 
@@ -467,34 +508,13 @@ static inline bf_cell* bf_run_looprun(bf_cell* p, bf_op* L) {
 #if BF_PROFILE
     p = bf_looprun_generic(p, L);
 #else
-    if (L->val == 5 &&
-        L[1].cmd == bfo_VAL_MZ && L[1].val == 1 &&
-        L[2].cmd == bfo_VAL_MUL && L[2].val == 1 &&
-        L[3].cmd == bfo_VAL_MZ && L[3].val == 1 &&
-        L[4].cmd == bfo_VAL) {
-        p = bf_looprun_mz_mul_mz_val(
-            p, (bf_cell)L->buf, L->off,
-            L[1].buf, L[1].off, L[2].buf, L[2].off,
-            L[3].buf, L[3].off, (bf_cell)L[4].val, L[4].off);
-    } else if (L->val == 5 &&
-               L[1].cmd == bfo_VAL &&
-               L[2].cmd == bfo_VAL_MUL &&
-               L[3].cmd == bfo_VAL_MZ &&
-               L[4].cmd == bfo_VAL_MZ) {
-        p = bf_looprun_val_mul_mz_mz(
-            p, (bf_cell)L->buf, L->off,
-            (bf_cell)L[1].val, L[1].off,
-            L[2].val, L[2].buf, L[2].off,
-            L[3].val, L[3].buf, L[3].off,
-            L[4].val, L[4].buf, L[4].off);
-    } else {
-        p = bf_looprun_rest(p, L);
-    }
+    if (*p) p = bf_looprun_taken(p, L, L->sub);
 #endif
     return bf_apply_rew(p, L + L->val);
 }
 
 static inline bf_cell* bf_run_mzscan(bf_cell* p, bf_op* M) {
+    if (*p == 0) return bf_apply_rew(p, M + 2);
 #if !BF_PROFILE
     if (M->buf == 0 && M[1].val == 1) {
         if (M[1].buf == 9) {
@@ -540,6 +560,165 @@ static inline bf_cell* bf_run_valscan(bf_cell* p, bf_op* M) {
     }
     return bf_apply_rew(p, M + 2);
 }
+
+// ---------------------------------------------------------------------
+// NEST runner. The body was compiled to segments once; each segment
+// is a bound helper call or a straight-line affine block, so an
+// iteration costs one small switch per segment instead of one Eval
+// dispatch per op. Child nests recurse through bf_nest_loop.
+// ---------------------------------------------------------------------
+#if BF_PROFILE
+static bf_cell* bf_nest_run(bf_cell* p, bf_op* L) {
+    return bf_exec_fwd(p, L);
+}
+#else
+static BF_NOINLINE bf_cell* bf_nest_run(bf_cell* p, bf_op* L);
+
+#if BF_AFFINE && BF_AFFINE_APPLY
+// One application of a compiled affine tree, by kind.
+static inline bf_cell* bf_aff_apply(bf_cell* p, const bf_affine* m) {
+    bf_cell old[4];
+    bf_aff_load4(p, m, old);
+    switch (m->kind) {
+    case BF_AFF_S1:
+        p[m->store[0].dst] = bf_aff_acc(m, 0, old);
+        break;
+    case BF_AFF_S2Z: {
+        int z = (m->store[0].nt == 0) ? 0 : 1;
+        int a = 1 - z;
+        unsigned t0 = m->store[a].t0, nt = m->store[a].nt;
+        bf_cell v = m->store[a].bias;
+        v = (bf_cell)(v + m->term[t0].k * old[m->term[t0].src]);
+        if (nt > 1)
+            v = (bf_cell)(v + m->term[t0 + 1].k * old[m->term[t0 + 1].src]);
+        p[m->store[z].dst] = m->store[z].bias;
+        p[m->store[a].dst] = v;
+        break;
+    }
+    case BF_AFF_S2: {
+        bf_cell n0 = bf_aff_acc(m, 0, old);
+        bf_cell n1 = bf_aff_acc(m, 1, old);
+        p[m->store[0].dst] = n0;
+        p[m->store[1].dst] = n1;
+        break;
+    }
+    case BF_AFF_S3: {
+        bf_cell n0 = bf_aff_acc(m, 0, old);
+        bf_cell n1 = bf_aff_acc(m, 1, old);
+        bf_cell n2 = bf_aff_acc(m, 2, old);
+        p[m->store[0].dst] = n0;
+        p[m->store[1].dst] = n1;
+        p[m->store[2].dst] = n2;
+        break;
+    }
+    default:
+        break;
+    }
+    return p + m->hop;
+}
+#endif
+
+// Every loop-carrying segment tests its cell before calling anything:
+// inner loops are entered far more often than they are taken, and an
+// untaken entry must cost about what Eval's inline FWD test costs.
+static inline bf_cell* bf_nest_seg(bf_cell* p, bf_op* L, const bf_seg* g) {
+    bf_op* C;
+    switch (g->kind) {
+#if BF_AFFINE && BF_AFFINE_APPLY
+    case BF_SEG_AFF:
+        return bf_aff_apply(p, g->aff);
+#endif
+    case BF_SEG_OPS:
+        return bf_exec_ops(p, L + g->a, L + g->b);
+    case BF_SEG_PTRS:
+        if (*p) p = bf_apply_ptr_s(p, g->a);
+        return p + g->off;
+    case BF_SEG_MZSCAN:
+        return bf_run_mzscan(p, L + g->a);
+    case BF_SEG_VALSCAN:
+        return bf_run_valscan(p, L + g->a);
+    case BF_SEG_LOOPRUN:
+    case BF_SEG_LOOPRUN_MZ_MUL_MZ_VAL:
+    case BF_SEG_LOOPRUN_VAL_MUL_MZ_MZ:
+    case BF_SEG_LOOPRUN_AFF_S1:
+    case BF_SEG_LOOPRUN_AFF_S2Z:
+    case BF_SEG_LOOPRUN_AFF_S2:
+    case BF_SEG_LOOPRUN_AFF_S3:
+        C = L + g->a;
+        if (*p) p = bf_looprun_taken(p, C, g->kind);
+        return bf_apply_rew(p, C + C->val);
+    case BF_SEG_NEST:
+        C = L + g->a;
+        if (*p) p = bf_nest_run(p, C);
+        return bf_apply_rew(p, C + C->val);
+    case BF_SEG_FWD:
+        C = L + g->a;
+        if (*p) p = bf_exec_fwd(p, C);
+        return bf_apply_rew(p, C + C->val);
+    default:
+        return p;
+    }
+}
+
+// Template: VAL_ZERO VAL | LOOPRUN | VAL_MZ VAL. Everything the body
+// needs is in locals; the only call is the (already specialized)
+// LOOPRUN helper, and only when its cell is nonzero.
+static BF_NOINLINE bf_cell* bf_nest_t_zv_run_mv(bf_cell* p, bf_op* L) {
+    bf_op* Z  = L + 1;
+    bf_op* V1 = L + 2;
+    bf_op* R  = L + 3;
+    bf_op* RR = R + R->val;
+    bf_op* M  = RR + 1;
+    bf_op* V2 = RR + 2;
+    const bf_cell fbuf = (bf_cell)L->buf;  const int foff  = L->off;
+    const bf_cell zval = (bf_cell)Z->val;  const int zoff  = Z->off;
+    const bf_cell v1   = (bf_cell)V1->val; const int v1off = V1->off;
+    const int     rsub = R->sub;
+    const bf_cell rbuf = (bf_cell)RR->buf; const int roff  = RR->off;
+    const int     mbuf = M->buf;           const int moff  = M->off;
+    const bf_cell mval = (bf_cell)M->val;
+    const bf_cell v2   = (bf_cell)V2->val; const int v2off = V2->off;
+
+    *p += fbuf;
+    p += foff;
+    for (;;) {
+        *p = zval;
+        p += zoff;
+        *p += v1;
+        p += v1off;
+        if (*p) p = bf_looprun_taken(p, R, rsub);
+        *p += rbuf;
+        p += roff;
+        p[mbuf] += (bf_cell)(mval * *p);
+        *p = 0;
+        p += moff;
+        *p += v2;
+        p += v2off;
+        if (*p == 0) break;
+        *p += fbuf;
+        p += foff;
+    }
+    return p;
+}
+
+// *p != 0 on entry. Stops at the failed loop test (REW not applied).
+static BF_NOINLINE bf_cell* bf_nest_run(bf_cell* p, bf_op* L) {
+    const bf_nest* n = bf_nest_get(L->aux);
+    if (!n) return bf_exec_fwd(p, L);
+    if (n->tmpl == BF_TMPL_ZV_RUN_MV) return bf_nest_t_zv_run_mv(p, L);
+    *p += (bf_cell)L->buf;
+    p += L->off;
+    for (;;) {
+        int i;
+        for (i = 0; i < n->nseg; i++)
+            p = bf_nest_seg(p, L, &n->seg[i]);
+        if (*p == 0) break;
+        *p += (bf_cell)L->buf;
+        p += L->off;
+    }
+    return p;
+}
+#endif // BF_PROFILE
 
 // Interpret a walkable IR range. Nested FWD/LOOPRUN/scans are executed
 // here so Eval only dispatches the outer LOOPRUN.
@@ -592,6 +771,11 @@ static bf_cell* bf_exec_ops(bf_cell* p, bf_op* b, bf_op* end) {
             break;
         case bfo_LOOPRUN:
             p = bf_run_looprun(p, b);
+            b += b->val + 1;
+            break;
+        case bfo_NEST:
+            if (*p) p = bf_nest_run(p, b);
+            p = bf_apply_rew(p, b + b->val);
             b += b->val + 1;
             break;
         case bfo_FWD:
@@ -774,8 +958,8 @@ DONE:
 
     // LOOPRUN: walking body interpreted internally. Sentinel pads let
     // a walk leave the logical tape; one post-loop bounds check
-    // matches MZSCAN. Flat 4-op copy-walks are specialized; other
-    // bodies still switch on a tape pointer.
+    // matches MZSCAN. The helper variant was decoded into sub at
+    // optimize time; an untaken loop costs only the cell test.
 #if BF_PROFILE
     #define _op_LOOPRUN(P) \
         do { \
@@ -788,35 +972,28 @@ DONE:
 #else
     #define _op_LOOPRUN(P) \
         do { \
-            if ((P)->val == 5 && \
-                (P)[1].cmd == bfo_VAL_MZ && (P)[1].val == 1 && \
-                (P)[2].cmd == bfo_VAL_MUL && (P)[2].val == 1 && \
-                (P)[3].cmd == bfo_VAL_MZ && (P)[3].val == 1 && \
-                (P)[4].cmd == bfo_VAL) { \
-                tp = bf_looprun_mz_mul_mz_val( \
-                    ptr + sp, (bf_cell)(P)->buf, (P)->off, \
-                    (P)[1].buf, (P)[1].off, (P)[2].buf, (P)[2].off, \
-                    (P)[3].buf, (P)[3].off, (bf_cell)(P)[4].val, (P)[4].off); \
-            } else if ((P)->val == 5 && \
-                       (P)[1].cmd == bfo_VAL && \
-                       (P)[2].cmd == bfo_VAL_MUL && \
-                       (P)[3].cmd == bfo_VAL_MZ && \
-                       (P)[4].cmd == bfo_VAL_MZ) { \
-                tp = bf_looprun_val_mul_mz_mz( \
-                    ptr + sp, (bf_cell)(P)->buf, (P)->off, \
-                    (bf_cell)(P)[1].val, (P)[1].off, \
-                    (P)[2].val, (P)[2].buf, (P)[2].off, \
-                    (P)[3].val, (P)[3].buf, (P)[3].off, \
-                    (P)[4].val, (P)[4].buf, (P)[4].off); \
-            } else { \
-                tp = bf_looprun_rest(ptr + sp, (P)); \
+            if (ptr[sp] != 0) { \
+                tp = bf_looprun_taken(ptr + sp, (P), (P)->sub); \
+                sp = (int)(tp - ptr); \
+                _bf_bound_sp(); \
             } \
-            sp = (int)(tp - ptr); \
-            _bf_bound_sp(); \
             (P) += (P)->val; \
             ptr[sp] += (bf_cell)(P)->buf; \
         } while (0)
 #endif
+
+    // NEST: compiled segment body, run internally; same exit protocol
+    // as LOOPRUN (helper stops at the loop test, Eval applies the REW).
+    #define _op_NEST(P) \
+        do { \
+            if (ptr[sp] != 0) { \
+                tp = bf_nest_run(ptr + sp, (P)); \
+                sp = (int)(tp - ptr); \
+                _bf_bound_sp(); \
+            } \
+            (P) += (P)->val; \
+            ptr[sp] += (bf_cell)(P)->buf; \
+        } while (0)
 
     // Dispatch tail, shared by both arms. BF_FAST drops the per-op
     // bounds check (sentinel pads keep accesses in-allocation).

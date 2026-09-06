@@ -64,6 +64,39 @@ void bffsree_Print(bf_VM* vm, char* inp, int lang) {
                     }
             }
 #endif
+            if (bfo[i].cmd == bfo_NEST) {
+                const bf_nest *n = bf_nest_get(bfo[i].aux);
+                int s;
+                if (n) {
+                    printf("        // nest:");
+                    for (s = 0; s < n->nseg; s++) {
+                        const bf_seg *g = &n->seg[s];
+                        switch (g->kind) {
+                        case BF_SEG_AFF:
+#if BF_AFFINE
+                            printf(" aff.%s", g->aff ? bf_affine_kind_name(g->aff->kind) : "?");
+#endif
+                            break;
+                        case BF_SEG_OPS:     printf(" ops[%d,%d)", i + g->a, i + g->b); break;
+                        case BF_SEG_PTRS:    printf(" scan%+d", g->a); break;
+                        case BF_SEG_MZSCAN:  printf(" mzscan@%d", i + g->a); break;
+                        case BF_SEG_VALSCAN: printf(" valscan@%d", i + g->a); break;
+                        case BF_SEG_LOOPRUN:
+                        case BF_SEG_LOOPRUN_MZ_MUL_MZ_VAL:
+                        case BF_SEG_LOOPRUN_VAL_MUL_MZ_MZ:
+                        case BF_SEG_LOOPRUN_AFF_S1:
+                        case BF_SEG_LOOPRUN_AFF_S2Z:
+                        case BF_SEG_LOOPRUN_AFF_S2:
+                        case BF_SEG_LOOPRUN_AFF_S3:
+                            printf(" looprun@%d", i + g->a); break;
+                        case BF_SEG_NEST:    printf(" nest@%d", i + g->a); break;
+                        case BF_SEG_FWD:     printf(" fwd@%d", i + g->a); break;
+                        default:             printf(" ?"); break;
+                        }
+                    }
+                    printf("\n");
+                }
+            }
         }
     }
 }
@@ -98,7 +131,8 @@ void bffsree_ProfileReport(bf_VM* vm) {
     // superinstructions count internal iterations at their own site)
     for (i = 0; i < n; i++) {
         k = bfo[i].cmd;
-        if (k != bfo_REW && k != bfo_MZSCAN && k != bfo_VALSCAN && k != bfo_LOOPRUN) continue;
+        if (k != bfo_REW && k != bfo_MZSCAN && k != bfo_VALSCAN &&
+            k != bfo_LOOPRUN && k != bfo_NEST) continue;
         if (prof[i] == 0) continue;
         for (j = 0; j < nt; j++) if (prof[i] > prof[top[j]]) break;
         if (j < 10) {
@@ -133,7 +167,7 @@ void bffsree_ProfileReport(bf_VM* vm) {
                     int c = bfo[j].cmd;
                     if (c == bfo_FWD) { j += bfo[j].val; continue; }  // nested loop
                     if (c == bfo_MZSCAN || c == bfo_VALSCAN) { sum += 0; j += 2; continue; }
-                    if (c == bfo_LOOPRUN) { j += bfo[j].val; continue; }
+                    if (c == bfo_LOOPRUN || c == bfo_NEST) { j += bfo[j].val; continue; }
                     sum += prof[j];
                 }
                 inloop[i] = sum;
@@ -158,7 +192,8 @@ void bffsree_ProfileReport(bf_VM* vm) {
                 if (i > s && i < e) {
                     int c = bfo[i].cmd;
                     if (c == bfo_FWD || c == bfo_REW) tag = "  (nested)";
-                    else if (c == bfo_MZSCAN || c == bfo_VALSCAN || c == bfo_LOOPRUN) tag = "  (block)";
+                    else if (c == bfo_MZSCAN || c == bfo_VALSCAN ||
+                             c == bfo_LOOPRUN || c == bfo_NEST) tag = "  (block)";
                 }
                 fprintf(stderr, "//     [%d] %-9s val=%-6d off=%-4d buf=%-4d %llu%s\n",
                         i, op_names[bfo[i].cmd], bfo[i].val, bfo[i].off, bfo[i].buf,

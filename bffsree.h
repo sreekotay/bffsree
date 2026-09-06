@@ -91,6 +91,50 @@ enum {
 #define BF_AFFINE_MAX_SRC   24
 #endif
 
+// Nest: a loop with no I/O whose body runs inside one helper call
+// instead of one Eval dispatch per op. Covers the scan-carrying loops
+// LOOPRUN cannot take. Two runners:
+//   templates — whole-body straight-line C for op-kind signatures
+//     that dominate the corpus, parameters hoisted into locals once
+//     per entry (the LOOPRUN helpers, one level up). Measured win.
+//   generic — the body cut into segments (affine block bound to a
+//     shape evaluator, scan, block helper, child nest) and run by a
+//     small switch. Measured *slower* than Eval's computed goto:
+//     interpreting a map descriptor once per iteration costs more
+//     than dispatching the 2-3 trivial ops it replaces. Off by
+//     default (BF_NEST_GENERIC=0); loops without a template stay in
+//     Eval. -DBF_NEST=0 disables nests entirely.
+#ifndef BF_NEST
+#define BF_NEST 1
+#endif
+#ifndef BF_NEST_GENERIC
+#define BF_NEST_GENERIC 0
+#endif
+// Generic runner only: bind arithmetic runs to the affine shape
+// evaluator (1) or leave them as op ranges for the switch walker (0).
+#ifndef BF_NEST_AFF
+#define BF_NEST_AFF 1
+#endif
+#define BF_NEST_MAX_SEG 16
+
+enum {
+    BF_SEG_AFF = 1,   /* affine block, straight-line by kind */
+    BF_SEG_OPS,       /* arithmetic op range [a, b) — switch walk */
+    BF_SEG_PTRS,      /* stride scan: a = stride, then off */
+    BF_SEG_MZSCAN,    /* block op at header+a, helper applies its REW */
+    BF_SEG_VALSCAN,
+    BF_SEG_LOOPRUN,   /* LOOPRUN, generic walker; variants bound at compile time: */
+    BF_SEG_LOOPRUN_MZ_MUL_MZ_VAL,
+    BF_SEG_LOOPRUN_VAL_MUL_MZ_MZ,
+    BF_SEG_LOOPRUN_AFF_S1,
+    BF_SEG_LOOPRUN_AFF_S2Z,
+    BF_SEG_LOOPRUN_AFF_S2,
+    BF_SEG_LOOPRUN_AFF_S3,
+    BF_SEG_NEST,      /* child nest at header+a */
+    BF_SEG_FWD,       /* nested loop the compiler could not nest */
+    BF_SEG_Total
+};
+
 // Profiling build (-DBF_PROFILE=1, or `make prof`): counts executions
 // per IR op (iterations for loop-carrying ops) and dumps a dynamic op
 // histogram plus the hottest loop sites to stderr after the run.
@@ -177,7 +221,7 @@ enum {
 // order; add ops here and give them an _op_* body in bffsree.c.
 #define BF_OP_LIST(X) \
     X(NOOP) X(VAL) X(PUT) X(GET) X(FWD) X(REW) X(PTR_S) X(MUL_MUL) \
-    X(VAL_MZ) X(VAL_MUL) X(VAL_ZERO) X(MZSCAN) X(VALSCAN) X(LOOPRUN) X(EOP)
+    X(VAL_MZ) X(VAL_MUL) X(VAL_ZERO) X(MZSCAN) X(VALSCAN) X(LOOPRUN) X(NEST) X(EOP)
 
 enum ebfo_CMD {
 #define X(n) bfo_##n,
@@ -188,11 +232,43 @@ enum ebfo_CMD {
 
 typedef struct bf_op {
     uint8_t     cmd;
+    uint8_t     sub;   // LOOPRUN: helper variant (BF_SEG_LOOPRUN*), decoded once
     bf_op_buf_t buf;   // IR argument: loop-inline delta OR target offset
     bf_off_t    off;   // pointer delta after op
-    uint16_t    aux;   // 1-based affine map id (LOOPRUN); 0 = none
+    uint16_t    aux;   // 1-based affine map id (LOOPRUN) / nest id (NEST)
     int32_t     val;   // jump distance, immediate value, multiplier
 } bf_op;
+
+// One compiled body segment. Op references (a, b) are relative to
+// the nest's header op so the runner needs only the header pointer.
+typedef struct bf_seg {
+    uint8_t  kind;    /* BF_SEG_* */
+    int16_t  off;     /* PTRS: pointer delta after the scan */
+    int32_t  a, b;
+    const struct bf_affine *aff;   /* AFF: bound map (resolved after compile) */
+} bf_seg;
+
+// Body templates: whole-body straight-line runners for op-kind
+// signatures that dominate the corpus. Parameters (vals/offs/bufs)
+// are read from the parameter block into locals once per entry.
+enum {
+    BF_TMPL_NONE = 0,
+    BF_TMPL_ZV_RUN_MV     /* VAL_ZERO VAL | LOOPRUN | VAL_MZ VAL */
+};
+
+typedef struct bf_nest {
+    uint8_t nseg;
+    uint8_t tmpl;     /* BF_TMPL_*; 0 = generic segment runner */
+    bf_seg  seg[BF_NEST_MAX_SEG];
+} bf_nest;
+
+const bf_nest *bf_nest_get(unsigned id);
+int            bf_nest_count(void);
+
+// Which internal helper a LOOPRUN header selects. Pure IR inspection;
+// shared by the Eval arm and the nest compiler so the choice is made
+// once per site rather than once per entry.
+int bf_looprun_variant(const bf_op *L);
 
 #if BF_AFFINE
 // Sparse affine map for one LOOPRUN body, relative to the pointer at

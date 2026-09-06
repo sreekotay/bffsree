@@ -6,10 +6,10 @@
 #include "bffsree.h"
 
 // optimization macros
-#define _bfe_(e,c)            do { (e).cmd=(uint8_t)(c); (e).aux=0; } while(0)
-#define _bfe_v(e,c,v)         do { (e).cmd=(uint8_t)(c); (e).aux=0; (e).val=(int32_t)(v); } while(0)
-#define _bfe_vo(e,c,v,o)      do { (e).cmd=(uint8_t)(c); (e).aux=0; (e).val=(int32_t)(v); (e).off=(bf_off_t)(o); (e).buf=0; } while(0)
-#define _bfe_vob(e,c,v,o,b)   do { (e).cmd=(uint8_t)(c); (e).aux=0; (e).val=(int32_t)(v); (e).off=(bf_off_t)(o); (e).buf=(bf_op_buf_t)(b); } while(0)
+#define _bfe_(e,c)            do { (e).cmd=(uint8_t)(c); (e).sub=0; (e).aux=0; } while(0)
+#define _bfe_v(e,c,v)         do { (e).cmd=(uint8_t)(c); (e).sub=0; (e).aux=0; (e).val=(int32_t)(v); } while(0)
+#define _bfe_vo(e,c,v,o)      do { (e).cmd=(uint8_t)(c); (e).sub=0; (e).aux=0; (e).val=(int32_t)(v); (e).off=(bf_off_t)(o); (e).buf=0; } while(0)
+#define _bfe_vob(e,c,v,o,b)   do { (e).cmd=(uint8_t)(c); (e).sub=0; (e).aux=0; (e).val=(int32_t)(v); (e).off=(bf_off_t)(o); (e).buf=(bf_op_buf_t)(b); } while(0)
 
 static int progscan(int* ptroff, char* chars, int pc, int proglen, int plusTok, int minusTok) {
     int c, ci = 0;
@@ -429,6 +429,9 @@ int bf_affine_from_body(const bf_op *body, int n, bf_affine *out) {
             cells[bf_aff_idx(dest)].written = 1;
             break;
 
+        case bfo_NOOP:
+            break;
+
         default:
             return 0;
         }
@@ -571,8 +574,157 @@ static void bf_markLoopRuns(bf_op* bfo, int pc) {
             if (id > 0) bfo[i].aux = (uint16_t)id;
         }
 #endif
+        bfo[i].sub = (uint8_t)bf_looprun_variant(bfo + i);
     }
 }
+
+// ----------------------------
+// Nest compilation. A FWD/REW loop with no I/O in its range becomes a
+// NEST: the body is cut into segments at every non-arithmetic op.
+// Arithmetic runs bind to an affine shape evaluator when they have
+// one, else stay an op range for the switch walker. Scans and block
+// ops bind to their existing helpers. Nested loops were compiled
+// first (we walk headers from the inside out), so they appear here
+// as NEST blocks; anything that failed to compile stays a generic
+// FWD segment. The FWD/body/REW ops stay in place as the parameter
+// block, exactly like LOOPRUN.
+// ----------------------------
+static bf_nest *bf_nest_pool;
+static int      bf_nest_npool;
+static int      bf_nest_cap;
+
+const bf_nest *bf_nest_get(unsigned id) {
+    if (id == 0 || (int)id > bf_nest_npool) return 0;
+    return &bf_nest_pool[id - 1];
+}
+
+int bf_nest_count(void) {
+    return bf_nest_npool;
+}
+
+static void bf_nest_reset(void) {
+    free(bf_nest_pool);
+    bf_nest_pool = 0;
+    bf_nest_npool = 0;
+    bf_nest_cap = 0;
+}
+
+#if BF_NEST
+static int bf_nest_intern(const bf_nest *n) {
+    if (bf_nest_npool >= 0xFFFF) return 0;
+    if (bf_nest_npool >= bf_nest_cap) {
+        int ncap = bf_nest_cap ? bf_nest_cap * 2 : 64;
+        bf_nest *p = (bf_nest *)realloc(bf_nest_pool, (size_t)ncap * sizeof(bf_nest));
+        if (!p) return 0;
+        bf_nest_pool = p;
+        bf_nest_cap = ncap;
+    }
+    bf_nest_pool[bf_nest_npool] = *n;
+    bf_nest_npool++;
+    return bf_nest_npool;
+}
+
+static int bf_isArith(int c) {
+    return c == bfo_VAL || c == bfo_VAL_MZ || c == bfo_VAL_MUL ||
+           c == bfo_VAL_ZERO || c == bfo_MUL_MUL || c == bfo_NOOP;
+}
+
+static int bf_nest_compile(bf_op *bfo, int s, bf_nest *n) {
+    int e = s + bfo[s].val, j = s + 1;
+
+    memset(n, 0, sizeof *n);
+    while (j < e) {
+        int c = bfo[j].cmd;
+        bf_seg *g;
+        if (n->nseg >= BF_NEST_MAX_SEG) return 0;
+        g = &n->seg[n->nseg];
+        if (bf_isArith(c)) {
+            int k = j;
+            while (k < e && bf_isArith(bfo[k].cmd)) k++;
+            g->kind = BF_SEG_OPS;
+            g->a = j - s;
+            g->b = k - s;
+#if BF_AFFINE && BF_AFFINE_APPLY && BF_NEST_AFF
+            {
+                bf_affine map;
+                if (bf_affine_from_body(bfo + j, k - j, &map) && map.kind) {
+                    int id = bf_affine_intern(&map);
+                    if (id > 0) { g->kind = BF_SEG_AFF; g->a = id; }
+                }
+            }
+#endif
+            j = k;
+        } else if (c == bfo_PTR_S) {
+            g->kind = BF_SEG_PTRS;
+            g->a = bfo[j].val;
+            g->off = bfo[j].off;
+            j++;
+        } else if (c == bfo_MZSCAN || c == bfo_VALSCAN) {
+            g->kind = (c == bfo_MZSCAN) ? BF_SEG_MZSCAN : BF_SEG_VALSCAN;
+            g->a = j - s;
+            j += 3;
+        } else if (c == bfo_LOOPRUN || c == bfo_NEST || c == bfo_FWD) {
+            g->kind = (c == bfo_LOOPRUN) ? (uint8_t)bfo[j].sub
+                    : (c == bfo_NEST)    ? BF_SEG_NEST : BF_SEG_FWD;
+            g->a = j - s;
+            j += bfo[j].val + 1;
+        } else {
+            return 0;
+        }
+        n->nseg++;
+    }
+    return j == e;
+}
+
+// Match a compiled body against the template signatures by op kind.
+static int bf_nest_template(const bf_op *bfo, int s) {
+    int e = s + bfo[s].val;
+    if (bfo[s + 1].cmd == bfo_VAL_ZERO && bfo[s + 2].cmd == bfo_VAL &&
+        bfo[s + 3].cmd == bfo_LOOPRUN) {
+        int r = s + 3 + bfo[s + 3].val;   /* LOOPRUN's REW */
+        if (r + 3 == e && bfo[r + 1].cmd == bfo_VAL_MZ && bfo[r + 2].cmd == bfo_VAL)
+            return BF_TMPL_ZV_RUN_MV;
+    }
+    return BF_TMPL_NONE;
+}
+
+static void bf_markNests(bf_op *bfo, int pc) {
+    int i, j, e, c;
+    bf_nest n;
+
+    for (i = pc - 1; i >= 0; i--) {
+        if (bfo[i].cmd != bfo_FWD) continue;
+        e = i + bfo[i].val;
+        if (e >= pc || bfo[e].cmd != bfo_REW) continue;
+        for (j = i + 1; j < e; j++) {
+            c = bfo[j].cmd;
+            if (c == bfo_PUT || c == bfo_GET || c == bfo_EOP) break;
+        }
+        if (j < e) continue;
+        if (!bf_nest_compile(bfo, i, &n)) continue;
+        n.tmpl = (uint8_t)bf_nest_template(bfo, i);
+        if (!n.tmpl && !BF_NEST_GENERIC) continue;
+        {
+            int id = bf_nest_intern(&n);
+            if (id <= 0) continue;
+            bfo[i].cmd = bfo_NEST;
+            bfo[i].aux = (uint16_t)id;
+        }
+    }
+
+    // Bind affine pointers now that both pools have stopped growing.
+    for (i = 0; i < bf_nest_npool; i++) {
+        bf_nest *m = &bf_nest_pool[i];
+        for (j = 0; j < m->nseg; j++)
+            if (m->seg[j].kind == BF_SEG_AFF)
+#if BF_AFFINE
+                m->seg[j].aff = bf_affine_get((unsigned)m->seg[j].a);
+#else
+                m->seg[j].aff = 0;
+#endif
+    }
+}
+#endif // BF_NEST
 
 // ----------------------------
 // Program optimization
@@ -581,6 +733,7 @@ int bf_Optimize(void** bfoptr, char* chars, int proglen, int printMetrics) {
 #if BF_AFFINE
     bf_affine_reset();
 #endif
+    bf_nest_reset();
     bf_op* bfo = (bf_op*)calloc((size_t)(proglen + 1), sizeof(bf_op));
     int lstack[bf_MEMDEFAULT];
 
@@ -677,6 +830,9 @@ int bf_Optimize(void** bfoptr, char* chars, int proglen, int printMetrics) {
 
     pc = bf_foldNoops(bfo, pc);
     bf_markLoopRuns(bfo, pc);
+#if BF_NEST
+    bf_markNests(bfo, pc);
+#endif
 
     if (printMetrics) {
         printf("//-- Optimization: Instructions [%d -> %d] using Bytes [%d -> %d] (op=%d bytes)\n",
@@ -701,6 +857,31 @@ int bf_Optimize(void** bfoptr, char* chars, int proglen, int printMetrics) {
             printf("//-- Affine: reconstructed %d/%d LOOPRUN bodies"
                    " (eval %d: s1=%d s2z=%d s2=%d s3=%d)\n",
                    naff, nrun, napp, ns1, ns2z, ns2, ns3);
+        }
+#endif
+#if BF_NEST
+        {
+            int k, s, nn = 0, nrem = 0, nlr = 0, cnt[BF_SEG_Total] = {0};
+            for (k = 0; k < pc; k++) {
+                if (bfo[k].cmd == bfo_FWD) nrem++;
+                if (bfo[k].cmd != bfo_NEST) continue;
+                nn++;
+                {
+                    const bf_nest *m = bf_nest_get(bfo[k].aux);
+                    if (!m) continue;
+                    for (s = 0; s < m->nseg; s++) {
+                        int kd = m->seg[s].kind;
+                        cnt[kd]++;
+                        if (kd >= BF_SEG_LOOPRUN && kd <= BF_SEG_LOOPRUN_AFF_S3) nlr++;
+                    }
+                }
+            }
+            printf("//-- Nest: %d loops compiled, %d left to Eval"
+                   " (segments: aff=%d ops=%d scan=%d mzscan=%d valscan=%d"
+                   " looprun=%d nest=%d fwd=%d)\n",
+                   nn, nrem, cnt[BF_SEG_AFF], cnt[BF_SEG_OPS], cnt[BF_SEG_PTRS],
+                   cnt[BF_SEG_MZSCAN], cnt[BF_SEG_VALSCAN], nlr,
+                   cnt[BF_SEG_NEST], cnt[BF_SEG_FWD]);
         }
 #endif
     }
