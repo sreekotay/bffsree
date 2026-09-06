@@ -603,7 +603,7 @@ int bf_affine_format(const bf_affine *m, char *buf, int buflen) {
 // ----------------------------
 static void bf_markLoopRuns(bf_op* bfo, int pc) {
     int i, j, n, c, okb;
-#if BF_AFFINE && BF_AFFINE_APPLY
+#if BF_AFFINE
     bf_affine map;
 #endif
 
@@ -618,6 +618,19 @@ static void bf_markLoopRuns(bf_op* bfo, int pc) {
                 c != bfo_VAL_ZERO && c != bfo_MUL_MUL && c != bfo_ZFILL) { okb = 0; break; }
         }
         if (!okb) continue;
+#if BF_AFFINE
+        // Run-once body: no pointer drift and the loop cell is left
+        // at constant 0, so the loop test always fails after one
+        // pass. That is an if-block, not a walk; Eval dispatching
+        // the body inline beats any internal walker.
+        if (bf_affine_from_body(bfo + i + 1, n - 1, &map) && map.hop == 0) {
+            int s, once = 0;
+            for (s = 0; s < map.nstore; s++)
+                if (map.store[s].dst == 0 && map.store[s].nt == 0 && map.store[s].bias == 0)
+                    once = 1;
+            if (once) continue;
+        }
+#endif
         bfo[i].cmd = bfo_LOOPRUN;
 #if BF_AFFINE && BF_AFFINE_APPLY
         if (bf_affine_from_body(bfo + i + 1, n - 1, &map) && map.kind) {
