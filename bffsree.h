@@ -221,7 +221,7 @@ enum {
 // order; add ops here and give them an _op_* body in bffsree.c.
 #define BF_OP_LIST(X) \
     X(NOOP) X(VAL) X(PUT) X(GET) X(FWD) X(REW) X(PTR_S) X(MUL_MUL) \
-    X(VAL_MZ) X(VAL_MUL) X(VAL_ZERO) X(MZSCAN) X(VALSCAN) X(LOOPRUN) X(NEST) X(EOP)
+    X(VAL_MZ) X(VAL_MUL) X(VAL_ZERO) X(ZFILL) X(MZSCAN) X(VALSCAN) X(LOOPRUN) X(NEST) X(EOP)
 
 enum ebfo_CMD {
 #define X(n) bfo_##n,

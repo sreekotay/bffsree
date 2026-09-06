@@ -355,6 +355,29 @@ static inline bf_cell* bf_apply_rew(bf_cell* p, const bf_op* rew) {
     return p + rew->off;
 }
 
+// ZFILL: k = +n fills p[0..n-1], k = -n fills p[-(n-1)..0]. Small
+// fills (the common case) are straight-line stores; a memset call
+// would cost more than the dispatches it replaces.
+static inline void bf_zfill(bf_cell* p, int k, bf_cell v) {
+    if (k < 0) { p += k + 1; k = -k; }
+    switch (k) {
+    case 8: p[7] = v; /* fall through */
+    case 7: p[6] = v; /* fall through */
+    case 6: p[5] = v; /* fall through */
+    case 5: p[4] = v; /* fall through */
+    case 4: p[3] = v; /* fall through */
+    case 3: p[2] = v; /* fall through */
+    case 2: p[1] = v; /* fall through */
+    case 1: p[0] = v; return;
+    default: break;
+    }
+    if (sizeof(bf_cell) == 1) {
+        memset(p, (int)(unsigned char)v, (size_t)k);
+    } else {
+        while (k-- > 0) *p++ = v;
+    }
+}
+
 #if !BF_PROFILE
 #if BF_AFFINE && BF_AFFINE_APPLY
 // Straight-line eval of a compiled affine tree. Snapshot the bound
@@ -823,6 +846,11 @@ static bf_cell* bf_exec_ops(bf_cell* p, bf_op* b, bf_op* end) {
             p += b->off;
             b++;
             break;
+        case bfo_ZFILL:
+            bf_zfill(p, b->buf, (bf_cell)b->val);
+            p += b->off;
+            b++;
+            break;
         case bfo_MUL_MUL:
             p[b->buf] *= (bf_cell)(b->val * *p);
             p += b->off;
@@ -972,6 +1000,16 @@ DONE:
                                  ptr[sp] = 0; } while (0)
     #define _op_VAL_MUL(P)  do { ptr[sp + (P)->buf] += (bf_cell)((P)->val * ptr[sp]); } while (0)
     #define _op_VAL_ZERO(P) do { ptr[sp] = (bf_cell)(P)->val; } while (0)
+#ifdef BF_FAST
+    #define _op_ZFILL(P)    do { bf_zfill(ptr + sp, (P)->buf, (bf_cell)(P)->val); } while (0)
+#else
+    // Checked build: the whole fill range must be on the tape, as the
+    // per-cell VAL_ZERO ops it replaced would have required.
+    #define _op_ZFILL(P)    do { int k_ = (P)->buf; \
+                                 int far_ = sp + (k_ > 0 ? k_ - 1 : k_ + 1); \
+                                 if (_mybounds(far_, ptrLen)) goto ERROR_BF; \
+                                 bf_zfill(ptr + sp, k_, (bf_cell)(P)->val); } while (0)
+#endif
     #define _op_MUL_MUL(P)  do { ptr[sp + (P)->buf] *= (bf_cell)((P)->val * ptr[sp]); } while (0)
     #define _op_EOP(P)      do { bfo = 0; goto DONE; } while (0)
 

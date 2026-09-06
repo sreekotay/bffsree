@@ -217,47 +217,84 @@ static int optimizeLoop(bf_op* bfo, int s) {
 // op's off applies only on its fall-through path. Jump distances
 // (val) are renumbered for the deleted slots. Returns the new length.
 // ----------------------------
-static int bf_foldNoops(bf_op* bfo, int pc) {
-    int*  nidx = (int*)malloc(sizeof(int) * (size_t)(pc + 1));
-    char* del  = (char*)malloc((size_t)(pc + 1));
-    int i, w, acc = 0;
+// Remove del-marked slots and renumber FWD/REW jump distances. Jumps
+// only ever target FWD/REW ops, which no pass marks for deletion.
+static int bf_compact(bf_op* bfo, int pc, const char* del) {
+    int* nidx = (int*)malloc(sizeof(int) * (size_t)(pc + 1));
+    int i, w;
+    if (!nidx) return pc;
+    for (i = 0, w = 0; i < pc; i++) {
+        nidx[i] = w;
+        if (!del[i]) w++;
+    }
+    nidx[pc] = w;
+    for (i = 0; i < pc; i++)
+        if (bfo[i].cmd == bfo_FWD || bfo[i].cmd == bfo_REW)
+            bfo[i].val = nidx[i + bfo[i].val] - nidx[i];
+    for (i = 0, w = 0; i < pc; i++)
+        if (!del[i]) bfo[w++] = bfo[i];
+    free(nidx);
+    return w;
+}
 
-    if (nidx && del) {
-        // pass 1: mark deletable NOOPs and assign new indices.
-        // acc tracks the fold target's accumulated off so the
-        // result is guaranteed to fit bf_off_t.
-        for (i = 0, w = 0; i < pc; i++) {
-            nidx[i] = w;
-            if (bfo[i].cmd == bfo_NOOP && w > 0 &&
-                acc + bfo[i].off >= -32768 && acc + bfo[i].off <= 32767) {
+static int bf_foldNoops(bf_op* bfo, int pc) {
+    char* del = (char*)malloc((size_t)(pc + 1));
+    int i, last = -1;
+
+    if (del) {
+        // Fold each deletable NOOP's off into the previous surviving
+        // op; the fold target's accumulated off must fit bf_off_t.
+        for (i = 0; i < pc; i++) {
+            if (bfo[i].cmd == bfo_NOOP && last >= 0 &&
+                bfo[last].off + bfo[i].off >= -32768 &&
+                bfo[last].off + bfo[i].off <= 32767) {
                 del[i] = 1;
-                acc += bfo[i].off;
+                bfo[last].off = (bf_off_t)(bfo[last].off + bfo[i].off);
                 continue;
             }
             del[i] = 0;
-            acc = bfo[i].off;
-            w++;
+            last = i;
         }
-        nidx[pc] = w;
-
-        // pass 2: renumber jump distances against new indices
-        for (i = 0; i < pc; i++) {
-            if (bfo[i].cmd == bfo_FWD || bfo[i].cmd == bfo_REW)
-                bfo[i].val = nidx[i + bfo[i].val] - nidx[i];
-        }
-
-        // pass 3: compact, folding each deleted NOOP's off backward
-        for (i = 0, w = 0; i < pc; i++) {
-            if (del[i]) {
-                bfo[w - 1].off = (bf_off_t)(bfo[w - 1].off + bfo[i].off);
-                continue;
-            }
-            bfo[w++] = bfo[i];
-        }
-        pc = w;
+        pc = bf_compact(bfo, pc, del);
     }
-    _myfree(nidx);
     _myfree(del);
+    return pc;
+}
+
+// ----------------------------
+// Peephole: a run of k>=2 VAL_ZERO ops storing the same value to
+// adjacent cells (each stepping +1 or -1 onto the next) becomes one
+// ZFILL: val = fill value, buf = +k (cells p[0..k-1]) or -k (cells
+// p[-(k-1)..0]), off = the run's total pointer delta. Block clears
+// like [-]>[-]>[-] are common; this makes them one dispatch.
+// ----------------------------
+static int bf_fuseZeroFills(bf_op* bfo, int pc) {
+    char* del = (char*)calloc((size_t)pc + 1, 1);
+    int i, j, k, dir;
+
+    if (!del) return pc;
+    for (i = 0; i < pc; ) {
+        if (bfo[i].cmd != bfo_VAL_ZERO) { i++; continue; }
+        dir = bfo[i].off;
+        if (dir != 1 && dir != -1) { i++; continue; }
+        j = i;
+        while (j + 1 < pc && bfo[j].off == dir &&
+               bfo[j + 1].cmd == bfo_VAL_ZERO && bfo[j + 1].val == bfo[i].val)
+            j++;
+        k = j - i + 1;
+        if (k >= 2 && k <= 127) {
+            int total = (k - 1) * dir + bfo[j].off;
+            if (total >= -32768 && total <= 32767) {
+                bfo[i].cmd = bfo_ZFILL;
+                bfo[i].buf = (bf_op_buf_t)(dir * k);
+                bfo[i].off = (bf_off_t)total;
+                memset(del + i + 1, 1, (size_t)(k - 1));
+            }
+        }
+        i = j + 1;
+    }
+    pc = bf_compact(bfo, pc, del);
+    free(del);
     return pc;
 }
 
@@ -404,6 +441,20 @@ int bf_affine_from_body(const bf_op *body, int n, bf_affine *out) {
             cells[bf_aff_idx(cur)].used = 1;
             cells[bf_aff_idx(cur)].written = 1;
             break;
+
+        case bfo_ZFILL: {
+            int cnt = op->buf < 0 ? -op->buf : op->buf;
+            int dir = op->buf < 0 ? -1 : 1, t;
+            for (t = 0; t < cnt; t++) {
+                int at = cur + t * dir;
+                if (!bf_aff_inrange(at)) return 0;
+                memset(&cells[bf_aff_idx(at)], 0, sizeof cells[0]);
+                cells[bf_aff_idx(at)].b = k;
+                cells[bf_aff_idx(at)].used = 1;
+                cells[bf_aff_idx(at)].written = 1;
+            }
+            break;
+        }
 
         case bfo_VAL_MUL:
         case bfo_VAL_MZ:
@@ -564,7 +615,7 @@ static void bf_markLoopRuns(bf_op* bfo, int pc) {
         for (j = i + 1; j < i + n; j++) {
             c = bfo[j].cmd;
             if (c != bfo_VAL && c != bfo_VAL_MZ && c != bfo_VAL_MUL &&
-                c != bfo_VAL_ZERO && c != bfo_MUL_MUL) { okb = 0; break; }
+                c != bfo_VAL_ZERO && c != bfo_MUL_MUL && c != bfo_ZFILL) { okb = 0; break; }
         }
         if (!okb) continue;
         bfo[i].cmd = bfo_LOOPRUN;
@@ -622,6 +673,7 @@ int bf_nest_signature(const bf_op *bfo, int s, char *buf, int buflen) {
         case bfo_VAL_MZ:   ch = 'M'; break;
         case bfo_VAL_MUL:  ch = 'X'; break;
         case bfo_VAL_ZERO: ch = 'Z'; break;
+        case bfo_ZFILL:    ch = 'F'; break;
         case bfo_MUL_MUL:  ch = 'Q'; break;
         case bfo_NOOP:     ch = 'N'; break;
         case bfo_PTR_S:    ch = 'S'; break;
@@ -669,7 +721,8 @@ static int bf_nest_intern(const bf_nest *n) {
 
 static int bf_isArith(int c) {
     return c == bfo_VAL || c == bfo_VAL_MZ || c == bfo_VAL_MUL ||
-           c == bfo_VAL_ZERO || c == bfo_MUL_MUL || c == bfo_NOOP;
+           c == bfo_VAL_ZERO || c == bfo_MUL_MUL || c == bfo_NOOP ||
+           c == bfo_ZFILL;
 }
 
 static int bf_nest_compile(bf_op *bfo, int s, bf_nest *n) {
@@ -874,6 +927,7 @@ int bf_Optimize(void** bfoptr, char* chars, int proglen, int printMetrics) {
     if (loop != 0) goto OPT_ERROR;  // unmatched '['
 
     pc = bf_foldNoops(bfo, pc);
+    pc = bf_fuseZeroFills(bfo, pc);
     bf_markLoopRuns(bfo, pc);
 #if BF_NEST
     bf_markNests(bfo, pc);
