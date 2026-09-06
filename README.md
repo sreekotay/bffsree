@@ -38,6 +38,13 @@ run-once rule. The remaining gap to the Tritium JIT is the
 compile-to-native ceiling. `>30` marks a validation timeout; totals are
 omitted for rows with a timeout.
 
+The `Makefile` defaults to `gcc`. Same harness, same box, GCC 13 build
+of bffsree (default / `make fast`): mandelbrot 0.489 / 0.483, long
+0.049 / 0.045, hanoi 0.009 / 0.008, factor 0.308 / 0.292, golden 0.011 /
+0.010, fib 2.941 / 2.926, tree 1.542 / 1.506, go2bf mandelbrot 4.549 /
+4.451, total 9.898 / 9.721. GCC is a hair faster on BFBench mandelbrot
+and 5–10% slower everywhere else; `CC=clang make` if that matters.
+
 ## Features
 
 - **Optimizing IR**:
