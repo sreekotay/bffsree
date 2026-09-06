@@ -22,6 +22,8 @@ from typing import Sequence
 ROOT = Path(__file__).resolve().parent
 BUILD_DIR = ROOT / ".bench-build"
 RUNTIME_DIR = BUILD_DIR / "runtimes"
+# Hard cap for every process the test/bench harnesses launch.
+TEST_TIMEOUT_SECONDS = 30.0
 BF_CPP_REV = "a7c99b1c98d56534c77edb7c1fe47aae9975d00e"
 TRITIUM_REV = "525d346c006ea30dfc847ae3b32ed44d44fa9925"
 
@@ -361,7 +363,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("-n", "--runs", type=int, default=7)
     parser.add_argument("--warmups", type=int, default=1)
-    parser.add_argument("--timeout", type=float, default=30.0)
+    parser.add_argument("--timeout", type=float, default=TEST_TIMEOUT_SECONDS)
     parser.add_argument("--seed", type=int, default=20260905)
     parser.add_argument("--runtimes", nargs="+", choices=runtime_names)
     parser.add_argument("--workloads", nargs="+", choices=workload_names)

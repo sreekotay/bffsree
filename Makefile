@@ -111,7 +111,7 @@ compare:
 
 test-compare:
 	python3 -m unittest -v test_compare_bf_runtimes.py
-	python3 compare_bf_runtimes.py -n 1 --warmups 0 --timeout 10 \
+	python3 compare_bf_runtimes.py -n 1 --warmups 0 --timeout 30 \
 		--runtimes bffsree-checked bffsree-fast-word64 \
 		--workloads bfbench-simple go2bf-fib
 

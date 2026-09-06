@@ -39,7 +39,7 @@ run_benchmark() {
     local bfile="$2"
     local input="$3"
     local expected_out="$4"
-    local timeout_sec="${5:-60}"
+    local timeout_sec="${5:-30}"
 
     printf "%-25s" "$name"
     
@@ -47,9 +47,9 @@ run_benchmark() {
     
     local tmpfile=$(mktemp)
     if [ -n "$input" ]; then
-        echo -n "$input" | "$BFFSREE" "$BENCH_DIR/$bfile" 2>/dev/null > "$tmpfile" || true
+        echo -n "$input" | timeout -k 1 "$timeout_sec" "$BFFSREE" "$BENCH_DIR/$bfile" 2>/dev/null > "$tmpfile" || true
     else
-        "$BFFSREE" "$BENCH_DIR/$bfile" 2>/dev/null > "$tmpfile" || true
+        timeout -k 1 "$timeout_sec" "$BFFSREE" "$BENCH_DIR/$bfile" 2>/dev/null > "$tmpfile" || true
     fi
     
     local end_time=$(python3 -c 'import time; print(time.time())')
@@ -86,7 +86,7 @@ run_benchmark_file() {
     local name="$1"
     local bfile="$2"
     local outfile="$3"
-    local timeout_sec="${4:-60}"
+    local timeout_sec="${4:-30}"
 
     printf "%-25s" "$name"
     
@@ -94,7 +94,7 @@ run_benchmark_file() {
     
     local tmpfile=$(mktemp)
     local expectedfile=$(mktemp)
-    "$BFFSREE" "$BENCH_DIR/$bfile" 2>/dev/null > "$tmpfile" || true
+    timeout -k 1 "$timeout_sec" "$BFFSREE" "$BENCH_DIR/$bfile" 2>/dev/null > "$tmpfile" || true
     LC_ALL=C tr -d '\r' < "$BENCH_DIR/$outfile" > "$expectedfile"
     
     local end_time=$(python3 -c 'import time; print(time.time())')
@@ -125,16 +125,16 @@ printf "%-25s %9s  %s\n" "Test" "Time" "Status"
 echo "----------------------------------------------"
 
 # Run all benchmarks
-run_benchmark_file "Mandelbrot" "mandelbrot.b" "mandelbrot.result" 200
+run_benchmark_file "Mandelbrot" "mandelbrot.b" "mandelbrot.result" 30
 run_benchmark "Factoring" "factor.b" "123456789123456789
 " "123456789123456789: 3 3 7 11 13 19 3607 3803 52579
-" 50
-run_benchmark_file "Long Run" "long.b" "long.out" 200
-run_benchmark "Golden Ratio" "golden.b" "" "1.618033988749894848204586834365638117" 10
-run_benchmark_file "Hanoi" "hanoi.b" "hanoi.out" 80
-run_benchmark_file "99 Bottles of Beer" "beer.b" "beer.out" 10
+" 30
+run_benchmark_file "Long Run" "long.b" "long.out" 30
+run_benchmark "Golden Ratio" "golden.b" "" "1.618033988749894848204586834365638117" 30
+run_benchmark_file "Hanoi" "hanoi.b" "hanoi.out" 30
+run_benchmark_file "99 Bottles of Beer" "beer.b" "beer.out" 30
 run_benchmark "Simple Benchmark" "bench.b" "" "OK
-" 5
+" 30
 
 echo "----------------------------------------------"
 echo "Benchmarks complete!"

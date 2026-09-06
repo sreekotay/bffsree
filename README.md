@@ -132,8 +132,9 @@ checked against canonical output.
 
 The default protocol uses seven interleaved runs and median process wall
 time. A fixed seed makes the order reproducible. One untimed validation
-run per runtime and workload is included; pairs exceeding the timeout
-are reported rather than silently omitted.
+run per runtime and workload is included; pairs exceeding the 30-second
+timeout are reported rather than silently omitted. Every test and bench
+harness uses that same 30s cap.
 
 ```bash
 make compare                 # skips unavailable external runtimes

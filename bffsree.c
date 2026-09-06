@@ -109,6 +109,17 @@ static bf_cell* bf_word_scan3_backward(bf_cell* p) {
 #define BF_NOINLINE
 #endif
 
+#if BF_PROFILE
+static unsigned long long* bf_prof_counts;
+static bf_op* bf_prof_base;
+#define bf_prof_hit(op) do { \
+    if (bf_prof_counts) bf_prof_counts[(op) - bf_prof_base]++; \
+} while (0)
+#else
+#define bf_prof_hit(op) do { } while (0)
+#endif
+
+#if !BF_PROFILE
 // Out of line so the computed-goto Eval stays small. Inlining these
 // into Eval changes register allocation for every opcode, including
 // PTR_S, and that made BF_FAST slower than the checked build.
@@ -156,7 +167,9 @@ static BF_NOINLINE bf_cell* bf_mzscan_copy9_from2(bf_cell* p) {
     }
     return p;
 }
+#endif
 
+#if !BF_PROFILE
 // Hottest LOOPRUN shape on mandelbrot: decrement/walk, then
 // VAL_MZ, VAL_MUL, VAL_MZ, VAL. Straight-line, no inner switch.
 static BF_NOINLINE bf_cell* bf_looprun_mz_mul_mz_val(
@@ -190,6 +203,7 @@ static BF_NOINLINE bf_cell* bf_looprun_mz_mul_mz_val(
     }
     return p;
 }
+#endif
 
 static bf_cell* bf_exec_ops(bf_cell* p, bf_op* b, bf_op* end);
 
@@ -200,6 +214,7 @@ static bf_cell* bf_exec_fwd(bf_cell* p, bf_op* P) {
         for (;;) {
             p = bf_exec_ops(p, P + 1, P + P->val);
             if (*p == 0) break;
+            bf_prof_hit(P);
             *p += (bf_cell)P->buf;
             p += P->off;
         }
@@ -223,6 +238,7 @@ static BF_NOINLINE bf_cell* bf_apply_ptr_s(bf_cell* p, int stride) {
     return p;
 }
 
+#if !BF_PROFILE
 // Common 4-op LOOPRUN: VAL, VAL_MUL, VAL_MZ, VAL_MZ.
 static BF_NOINLINE bf_cell* bf_looprun_val_mul_mz_mz(
     bf_cell* p,
@@ -253,6 +269,7 @@ static BF_NOINLINE bf_cell* bf_looprun_val_mul_mz_mz(
     }
     return p;
 }
+#endif
 
 static inline bf_cell* bf_apply_rew(bf_cell* p, const bf_op* rew) {
     *p += (bf_cell)rew->buf;
@@ -260,6 +277,9 @@ static inline bf_cell* bf_apply_rew(bf_cell* p, const bf_op* rew) {
 }
 
 static inline bf_cell* bf_run_looprun(bf_cell* p, bf_op* L) {
+#if BF_PROFILE
+    p = bf_looprun_generic(p, L);
+#else
     if (L->val == 5 &&
         L[1].cmd == bfo_VAL_MZ && L[1].val == 1 &&
         L[2].cmd == bfo_VAL_MUL && L[2].val == 1 &&
@@ -283,10 +303,12 @@ static inline bf_cell* bf_run_looprun(bf_cell* p, bf_op* L) {
     } else {
         p = bf_looprun_generic(p, L);
     }
+#endif
     return bf_apply_rew(p, L + L->val);
 }
 
 static inline bf_cell* bf_run_mzscan(bf_cell* p, bf_op* M) {
+#if !BF_PROFILE
     if (M->buf == 0 && M[1].val == 1) {
         if (M->off == 1 && M[1].buf == 9 && M[1].off == -10)
             p = bf_mzscan_copy9_from1(p);
@@ -294,7 +316,10 @@ static inline bf_cell* bf_run_mzscan(bf_cell* p, bf_op* M) {
             p = bf_mzscan_copy9_from2(p);
         else
             p = bf_mzscan_copy(p, M->off, M[1].buf, M[1].off);
-    } else if (*p) {
+        return bf_apply_rew(p, M + 2);
+    }
+#endif
+    if (*p) {
         *p += (bf_cell)M->buf;
         p += M->off;
         for (;;) {
@@ -302,6 +327,7 @@ static inline bf_cell* bf_run_mzscan(bf_cell* p, bf_op* M) {
             *p = 0;
             p += M[1].off;
             if (*p == 0) break;
+            bf_prof_hit(M);
             *p += (bf_cell)M->buf;
             p += M->off;
         }
@@ -317,6 +343,7 @@ static inline bf_cell* bf_run_valscan(bf_cell* p, bf_op* M) {
             *p += (bf_cell)M[1].val;
             p += M[1].off;
             if (*p == 0) break;
+            bf_prof_hit(M);
             *p += (bf_cell)M->buf;
             p += M->off;
         }
@@ -328,6 +355,7 @@ static inline bf_cell* bf_run_valscan(bf_cell* p, bf_op* M) {
 // here so Eval only dispatches the outer LOOPRUN.
 static bf_cell* bf_exec_ops(bf_cell* p, bf_op* b, bf_op* end) {
     while (b < end) {
+        bf_prof_hit(b);
         switch (b->cmd) {
         case bfo_VAL:
             *p += (bf_cell)b->val;
@@ -455,6 +483,8 @@ DONE:
 #else
 #if BF_PROFILE
     #define _bf_prof(op)  do { if (vm->prof) vm->prof[(op) - (bf_op*)vm->prog_op]++; } while (0)
+    bf_prof_counts = vm->prof;
+    bf_prof_base = (bf_op*)vm->prog_op;
 #else
     #define _bf_prof(op)  do { } while (0)
 #endif
@@ -553,6 +583,16 @@ DONE:
     // a walk leave the logical tape; one post-loop bounds check
     // matches MZSCAN. Flat 4-op copy-walks are specialized; nested
     // scans and loops go through the generic tape-pointer interpreter.
+#if BF_PROFILE
+    #define _op_LOOPRUN(P) \
+        do { \
+            tp = bf_looprun_generic(ptr + sp, (P)); \
+            sp = (int)(tp - ptr); \
+            _bf_bound_sp(); \
+            (P) += (P)->val; \
+            ptr[sp] += (bf_cell)(P)->buf; \
+        } while (0)
+#else
     #define _op_LOOPRUN(P) \
         do { \
             if ((P)->val == 5 && \
@@ -583,6 +623,7 @@ DONE:
             (P) += (P)->val; \
             ptr[sp] += (bf_cell)(P)->buf; \
         } while (0)
+#endif
 
     // Dispatch tail, shared by both arms. BF_FAST drops the per-op
     // bounds check (sentinel pads keep accesses in-allocation).
