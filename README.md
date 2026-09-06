@@ -18,25 +18,25 @@ https://esolangs.org/wiki/Brainfuck_speed_test
 ## How fast?
 
 Median seconds over 7 interleaved, output-validated runs, Linux x86-64
-(bffsree/bf-cpp: GCC 13; Tritium: Clang 18):
+(bffsree/Tritium: Clang 18; bf-cpp: GCC 13):
 
 | | BFBench mandelbrot | long | hanoi | factor | golden | fib | binary tree | go2bf mandelbrot | **total** |
 |---|---|---|---|---|---|---|---|---|---|
-| **bffsree** (default) | 0.743 | 0.053 | 0.010 | 0.319 | 0.010 | 3.020 | 1.548 | 3.906 | **9.609** |
-| **bffsree** (`make fast`) | 0.733 | 0.055 | 0.008 | 0.285 | 0.009 | 3.705 | 1.876 | 3.845 | **10.516** |
-| [bf-cpp](https://github.com/jumbub/bf-cpp) | 0.956 | 0.431 | 0.091 | 0.275 | 0.010 | 4.705 | 2.615 | 4.523 | 13.605 |
-| [tritium](https://github.com/rdebath/Brainfuck) `-r` (interpreter) | 1.728 | 0.053 | 0.019 | 0.415 | 0.013 | 7.329 | >30 | >30 | — |
-| tritium JIT (reference, not an interpreter) | 0.359 | 0.006 | 0.012 | 0.064 | 0.007 | 3.834 | 22.352 | >30 | — |
+| **bffsree** (default) | 0.509 | 0.033 | 0.007 | 0.272 | 0.008 | 2.809 | 1.408 | 4.069 | **9.115** |
+| **bffsree** (`make fast`) | 0.506 | 0.035 | 0.007 | 0.270 | 0.008 | 2.801 | 1.401 | 4.008 | **9.036** |
+| [bf-cpp](https://github.com/jumbub/bf-cpp) | 0.957 | 0.431 | 0.091 | 0.274 | 0.010 | 4.703 | 2.614 | 4.524 | 13.604 |
+| [tritium](https://github.com/rdebath/Brainfuck) `-r` (interpreter) | 1.727 | 0.053 | 0.019 | 0.416 | 0.014 | 7.329 | >30 | >30 | — |
+| tritium JIT (reference, not an interpreter) | 0.359 | 0.006 | 0.012 | 0.064 | 0.007 | 3.837 | 22.319 | >30 | — |
 
-BFBench Mandelbrot is now about 1.3x faster than the previous portable
-word-scan build after specializing the 9-cell `MZSCAN` slides and the
-4-op copy-walk `LOOPRUN`. That is still far from the 3x / Tritium-JIT
-band. The extra code in the dispatch function helps that workload and
-the default build's total, but it hurts `make fast` on generated Fib
-and tree (i-cache / layout). Loop collapse still accounts for the
-`long` / `hanoi` margin versus bf-cpp. The JIT row is the compile-to-native
-ceiling. `>30` marks a validation timeout; totals are omitted for rows
-with a timeout.
+BFBench Mandelbrot went from 0.743 to 0.509 in one pass of profile-
+driven work with no new dispatch code in Eval: nest templates for its
+two hottest scan-carrying loop bodies, the `LOOPRUN` helper variant
+decoded once instead of per entry, run-once bodies left inline, and a
+four-way stride scan (mandelbrot scans 488M cells at stride 9). Fib and
+tree gained from the same `LOOPRUN` and scan changes; `long` from the
+run-once rule. The remaining gap to the Tritium JIT is the
+compile-to-native ceiling. `>30` marks a validation timeout; totals are
+omitted for rows with a timeout.
 
 ## Features
 
