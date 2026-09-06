@@ -47,6 +47,11 @@ with a timeout.
   - 9-cell tape frames: lane slides to offset 9 and +9 copy/mul walks
     keep the current frame in registers, then hop a whole record
   - Walking loops with arithmetic bodies → single-op internal loops
+  - Affine reconstruction: a walking `LOOPRUN` body is composed into
+    `new[i] = bias + Σ c[i][j]*old[j]` (mod the cell ring) and applied
+    as sparse arithmetic instead of switching on each inner op. `./bffsree -c`
+    prints the recovered maps. Not program-specific: hop and window come
+    from the IR, the same way fib/tree hop-3 and mandelbrot hop-9 do.
   - Portable 64-bit acceleration for stride-3 scans in generated BF
   - Pointer movement fused into every op (`off` field)
 - **Threaded dispatch**: computed-goto on GCC/Clang, switch elsewhere (`-DBF_USE_CGOTO=0/1`)

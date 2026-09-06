@@ -65,6 +65,19 @@
 
 typedef int16_t bf_off_t;
 
+// Reconstruct walking LOOPRUN bodies as affine maps over the cell ring
+// (new[i] = bias[i] + Σ c[i][j]*old[j]) and apply them as straight-line
+// arithmetic. Off by -DBF_AFFINE=0.
+#ifndef BF_AFFINE
+#define BF_AFFINE 1
+#endif
+
+#if BF_AFFINE
+#define BF_AFFINE_MAX_STORE 24
+#define BF_AFFINE_MAX_TERM  64
+#define BF_AFFINE_MAX_SRC   24
+#endif
+
 // Profiling build (-DBF_PROFILE=1, or `make prof`): counts executions
 // per IR op (iterations for loop-carrying ops) and dumps a dynamic op
 // histogram plus the hottest loop sites to stderr after the run.
@@ -164,8 +177,32 @@ typedef struct bf_op {
     uint8_t     cmd;
     bf_op_buf_t buf;   // IR argument: loop-inline delta OR target offset
     bf_off_t    off;   // pointer delta after op
+    uint16_t    aux;   // 1-based affine map id (LOOPRUN); 0 = none
     int32_t     val;   // jump distance, immediate value, multiplier
 } bf_op;
+
+#if BF_AFFINE
+// Sparse affine map for one LOOPRUN body, relative to the pointer at
+// the start of the body (after the LOOPRUN header's buf/off).
+typedef struct bf_affine {
+    int16_t hop;
+    int16_t src_off[BF_AFFINE_MAX_SRC];
+    uint8_t nsrc, nstore, nterm;
+    struct {
+        int16_t dst;
+        bf_cell bias;
+        uint8_t t0, nt;
+    } store[BF_AFFINE_MAX_STORE];
+    struct {
+        uint8_t src;
+        bf_cell k;
+    } term[BF_AFFINE_MAX_TERM];
+} bf_affine;
+
+const bf_affine *bf_affine_get(unsigned id);
+int              bf_affine_count(void);
+int              bf_affine_format(const bf_affine *m, char *buf, int buflen);
+#endif
 
 // -----------------------------
 // Helpers/macros

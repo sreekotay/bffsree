@@ -325,6 +325,52 @@ static inline bf_cell* bf_apply_rew(bf_cell* p, const bf_op* rew) {
     return p + rew->off;
 }
 
+#if !BF_PROFILE
+#if BF_AFFINE
+// Apply a reconstructed body map: snapshot the source cells, write
+// the sparse affine result, hop. No inner opcode switch.
+static BF_NOINLINE bf_cell* bf_looprun_affine(
+    bf_cell* p, bf_cell fbuf, int foff, const bf_affine* m)
+{
+    if (*p) {
+        *p += fbuf;
+        p += foff;
+        for (;;) {
+            bf_cell old[BF_AFFINE_MAX_SRC];
+            bf_cell neu[BF_AFFINE_MAX_STORE];
+            unsigned i, j;
+            for (i = 0; i < m->nsrc; i++)
+                old[i] = p[m->src_off[i]];
+            for (i = 0; i < m->nstore; i++) {
+                bf_cell v = m->store[i].bias;
+                unsigned t0 = m->store[i].t0;
+                for (j = 0; j < m->store[i].nt; j++)
+                    v = (bf_cell)(v + m->term[t0 + j].k * old[m->term[t0 + j].src]);
+                neu[i] = v;
+            }
+            for (i = 0; i < m->nstore; i++)
+                p[m->store[i].dst] = neu[i];
+            p += m->hop;
+            if (*p == 0) break;
+            *p += fbuf;
+            p += foff;
+        }
+    }
+    return p;
+}
+#endif
+
+static inline bf_cell* bf_looprun_rest(bf_cell* p, bf_op* L) {
+#if BF_AFFINE
+    if (L->aux) {
+        const bf_affine* am = bf_affine_get(L->aux);
+        if (am) return bf_looprun_affine(p, (bf_cell)L->buf, L->off, am);
+    }
+#endif
+    return bf_looprun_generic(p, L);
+}
+#endif
+
 static inline bf_cell* bf_run_looprun(bf_cell* p, bf_op* L) {
 #if BF_PROFILE
     p = bf_looprun_generic(p, L);
@@ -350,7 +396,7 @@ static inline bf_cell* bf_run_looprun(bf_cell* p, bf_op* L) {
             L[3].val, L[3].buf, L[3].off,
             L[4].val, L[4].buf, L[4].off);
     } else {
-        p = bf_looprun_generic(p, L);
+        p = bf_looprun_rest(p, L);
     }
 #endif
     return bf_apply_rew(p, L + L->val);
@@ -671,7 +717,7 @@ DONE:
                     (P)[3].val, (P)[3].buf, (P)[3].off, \
                     (P)[4].val, (P)[4].buf, (P)[4].off); \
             } else { \
-                tp = bf_looprun_generic(ptr + sp, (P)); \
+                tp = bf_looprun_rest(ptr + sp, (P)); \
             } \
             sp = (int)(tp - ptr); \
             _bf_bound_sp(); \
