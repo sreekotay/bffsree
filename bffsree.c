@@ -275,7 +275,7 @@ static BF_NOINLINE bf_cell* bf_looprun_generic(bf_cell* p, bf_op* P) {
     return bf_exec_fwd(p, P);
 }
 
-#if BF_CELL_BITS == 8
+#if BF_CELL_BITS == 8 && !BF_PROFILE
 // Body working set relative to the first body cell. 1 if every op is
 // tape arithmetic and the touched cells fit in 8 bytes.
 static int bf_looprun_analyze_window(const bf_op* P, int* lo_out, int* net_out) {
