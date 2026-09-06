@@ -80,6 +80,8 @@ void bffsree_ProfileReport(bf_VM* vm) {
     unsigned long long tot = 0;
     int i, j, k, n = vm->progLen_op;
     int top[10], nt = 0;
+    int ntop2 = 0, top2[12];
+    unsigned long long *inloop = 0;
 
     if (!prof || !bfo) return;
 
@@ -115,6 +117,63 @@ void bffsree_ProfileReport(bf_VM* vm) {
         for (i = s; i <= e; i++)
             fprintf(stderr, "//     %-9s val=%-6d off=%-4d buf=%d\n",
                     op_names[bfo[i].cmd], bfo[i].val, bfo[i].off, bfo[i].buf);
+    }
+
+    // Unconverted loops ranked by ops Eval dispatched *directly* in
+    // their body (not inside nested FWD/REW or block ops). This is
+    // where dispatch time goes; iteration counts alone hide it.
+    inloop = (unsigned long long*)calloc((size_t)n + 1, sizeof(*inloop));
+    if (inloop) {
+        for (i = 0; i < n; i++) {
+            if (bfo[i].cmd != bfo_FWD) continue;
+            {
+                int e = i + bfo[i].val;
+                unsigned long long sum = prof[e];  // REW back-edges
+                for (j = i + 1; j < e; j++) {
+                    int c = bfo[j].cmd;
+                    if (c == bfo_FWD) { j += bfo[j].val; continue; }  // nested loop
+                    if (c == bfo_MZSCAN || c == bfo_VALSCAN) { sum += 0; j += 2; continue; }
+                    if (c == bfo_LOOPRUN) { j += bfo[j].val; continue; }
+                    sum += prof[j];
+                }
+                inloop[i] = sum;
+            }
+        }
+        for (i = 0; i < n; i++) {
+            if (bfo[i].cmd != bfo_FWD || inloop[i] == 0) continue;
+            for (j = 0; j < ntop2; j++) if (inloop[i] > inloop[top2[j]]) break;
+            if (j < 12) {
+                for (k = (ntop2 < 12 ? ntop2 : 11); k > j; k--) top2[k] = top2[k - 1];
+                top2[j] = i;
+                if (ntop2 < 12) ntop2++;
+            }
+        }
+        if (ntop2) fprintf(stderr, "//-- unconverted loops by direct dispatches (body ops + back-edges):\n");
+        for (k = 0; k < ntop2; k++) {
+            int s = top2[k], e = s + bfo[s].val;
+            fprintf(stderr, "//   [%d] %llu dispatches, %llu iterations, %d body ops:\n",
+                    s, inloop[s], prof[e], bfo[s].val - 1);
+            for (i = s; i <= e; i++) {
+                const char *tag = "";
+                if (i > s && i < e) {
+                    int c = bfo[i].cmd;
+                    if (c == bfo_FWD || c == bfo_REW) tag = "  (nested)";
+                    else if (c == bfo_MZSCAN || c == bfo_VALSCAN || c == bfo_LOOPRUN) tag = "  (block)";
+                }
+                fprintf(stderr, "//     [%d] %-9s val=%-6d off=%-4d buf=%-4d %llu%s\n",
+                        i, op_names[bfo[i].cmd], bfo[i].val, bfo[i].off, bfo[i].buf,
+                        prof[i], tag);
+            }
+        }
+        free(inloop);
+    }
+
+    // BF_PROF_DUMP=1: every op with its count, for offline analysis
+    if (getenv("BF_PROF_DUMP")) {
+        fprintf(stderr, "//-- op dump: idx cmd val off buf count\n");
+        for (i = 0; i < n; i++)
+            fprintf(stderr, "//= %d %s %d %d %d %llu\n",
+                    i, op_names[bfo[i].cmd], bfo[i].val, bfo[i].off, bfo[i].buf, prof[i]);
     }
 }
 #endif // BF_PROFILE
