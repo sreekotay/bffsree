@@ -262,90 +262,67 @@ static int bf_foldNoops(bf_op* bfo, int pc) {
 }
 
 // ----------------------------
-// Convert remaining walking loops whose bodies are straight-line
-// arithmetic into LOOPRUN superinstructions. Must run after
-// bf_foldNoops so FWD jump distances are final. Body and REW ops stay
-// in place as the parameter block.
+// Convert remaining walking loops into LOOPRUN superinstructions.
+// A body is walkable when every op is tape arithmetic, a pointer
+// scan, an already-collapsed scan/run, or a nested walkable loop.
+// PUT/GET keep the loop as FWD/REW so I/O still goes through Eval.
+// Must run after bf_foldNoops so jump distances are final. Body and
+// REW ops stay in place as the parameter block.
 // ----------------------------
-static void bf_markLoopRuns(bf_op* bfo, int pc) {
-    int i, j, n, c, okb;
+static int bf_loop_is_walkable(const bf_op* bfo, int i, int pc);
 
-    for (i = 0; i < pc; i++) {
-        if (bfo[i].cmd != bfo_FWD) continue;
-        n = bfo[i].val;
-        if (n < 2 || i + n >= pc || bfo[i + n].cmd != bfo_REW) continue;
-        okb = 1;
-        for (j = i + 1; j < i + n; j++) {
-            c = bfo[j].cmd;
-            if (c != bfo_VAL && c != bfo_VAL_MZ && c != bfo_VAL_MUL &&
-                c != bfo_VAL_ZERO && c != bfo_MUL_MUL) { okb = 0; break; }
+static int bf_range_is_walkable(const bf_op* bfo, int lo, int hi, int pc) {
+    int j = lo, n;
+
+    while (j < hi) {
+        switch (bfo[j].cmd) {
+        case bfo_NOOP:
+        case bfo_VAL:
+        case bfo_VAL_MZ:
+        case bfo_VAL_MUL:
+        case bfo_VAL_ZERO:
+        case bfo_MUL_MUL:
+        case bfo_PTR_S:
+            j++;
+            break;
+        case bfo_MZSCAN:
+        case bfo_VALSCAN:
+            if (j + 2 >= hi || bfo[j + 2].cmd != bfo_REW) return 0;
+            j += 3;
+            break;
+        case bfo_LOOPRUN:
+            n = bfo[j].val;
+            if (n < 2 || j + n >= hi || bfo[j + n].cmd != bfo_REW) return 0;
+            j += n + 1;
+            break;
+        case bfo_FWD:
+            n = bfo[j].val;
+            if (j + n >= hi || !bf_loop_is_walkable(bfo, j, pc)) return 0;
+            j += n + 1;
+            break;
+        default:
+            return 0;
         }
-        if (okb) bfo[i].cmd = bfo_LOOPRUN;
     }
+    return j == hi;
 }
 
-// Bosman-style 9-cell mandelbrot kernels. PIXELSTEP is the repeated
-// FWD-19 pixel body plus the FWD-11 digit walk that always follows it.
-// DIGITSTEP is a leftover FWD-11 nest. Parameter blocks stay in place;
-// only the header opcode changes. Skip when profiling so the histogram
-// still names the inner MZSCAN / LOOPRUN / PTR_S sites.
-#if !BF_PROFILE
-static int bf_match_pixel19(const bf_op* P) {
-    return P[0].cmd == bfo_FWD && P[0].val == 19 &&
-           P[1].cmd == bfo_VAL &&
-           P[2].cmd == bfo_VAL_MZ &&
-           P[3].cmd == bfo_FWD && P[3].val == 9 &&
-           P[4].cmd == bfo_VAL &&
-           P[5].cmd == bfo_LOOPRUN && P[5].val == 5 &&
-           P[6].cmd == bfo_VAL_MZ &&
-           P[7].cmd == bfo_VAL_MUL &&
-           P[8].cmd == bfo_VAL_MZ &&
-           P[9].cmd == bfo_VAL &&
-           P[10].cmd == bfo_REW &&
-           P[11].cmd == bfo_PTR_S &&
-           P[12].cmd == bfo_REW &&
-           P[13].cmd == bfo_PTR_S &&
-           P[14].cmd == bfo_MZSCAN && P[14].val == 2 &&
-           P[15].cmd == bfo_VAL_MZ &&
-           P[16].cmd == bfo_REW &&
-           P[17].cmd == bfo_VAL_MZ &&
-           P[18].cmd == bfo_VAL &&
-           P[19].cmd == bfo_REW;
+static int bf_loop_is_walkable(const bf_op* bfo, int i, int pc) {
+    int n = bfo[i].val;
+    if ((bfo[i].cmd != bfo_FWD && bfo[i].cmd != bfo_LOOPRUN) ||
+        n < 2 || i + n >= pc || bfo[i + n].cmd != bfo_REW)
+        return 0;
+    return bf_range_is_walkable(bfo, i + 1, i + n, pc);
 }
 
-static int bf_match_digit11(const bf_op* P) {
-    return P[0].cmd == bfo_FWD && P[0].val == 11 &&
-           P[1].cmd == bfo_VAL_ZERO &&
-           P[2].cmd == bfo_VAL &&
-           P[3].cmd == bfo_LOOPRUN && P[3].val == 5 &&
-           P[4].cmd == bfo_VAL &&
-           P[5].cmd == bfo_VAL_MUL &&
-           P[6].cmd == bfo_VAL_MZ &&
-           P[7].cmd == bfo_VAL_MZ &&
-           P[8].cmd == bfo_REW &&
-           P[9].cmd == bfo_VAL_MZ &&
-           P[10].cmd == bfo_VAL &&
-           P[11].cmd == bfo_REW;
-}
-
-static void bf_markPixelKernels(bf_op* bfo, int pc) {
+static void bf_markLoopRuns(bf_op* bfo, int pc) {
     int i;
 
-    for (i = 0; i + 31 < pc; i++) {
-        if (bf_match_pixel19(bfo + i) && bf_match_digit11(bfo + i + 20)) {
-            bfo[i].cmd = bfo_PIXELSTEP;
-            bfo[i].val = 31; /* land on the FWD-11 REW */
-            i += 31;
-        }
-    }
-    for (i = 0; i + 11 < pc; i++) {
-        if (i >= 20 && bfo[i - 20].cmd == bfo_PIXELSTEP)
-            continue;
-        if (bfo[i].cmd == bfo_FWD && bf_match_digit11(bfo + i))
-            bfo[i].cmd = bfo_DIGITSTEP;
+    for (i = 0; i < pc; i++) {
+        if (bfo[i].cmd == bfo_FWD && bf_loop_is_walkable(bfo, i, pc))
+            bfo[i].cmd = bfo_LOOPRUN;
     }
 }
-#endif
 
 // ----------------------------
 // Program optimization
@@ -447,9 +424,6 @@ int bf_Optimize(void** bfoptr, char* chars, int proglen, int printMetrics) {
 
     pc = bf_foldNoops(bfo, pc);
     bf_markLoopRuns(bfo, pc);
-#if !BF_PROFILE
-    bf_markPixelKernels(bfo, pc);
-#endif
 
     if (printMetrics) {
         printf("//-- Optimization: Instructions [%d -> %d] using Bytes [%d -> %d] (op=%d bytes)\n",

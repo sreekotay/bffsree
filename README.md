@@ -45,8 +45,9 @@ with a timeout.
   - Loop collapse (`[-]` → zero, `[->+<]` → multiply-add, chained copies → `MUL_MUL`)
   - Scan loops (`[>]`, `[<<]`) → single strided scan op
   - Specialized 9-cell walking copies for BFBench-style tape frames
+  - Walking loops whose bodies are arithmetic, scans, pointer scans, or
+    nested walking loops → one `LOOPRUN` (interpreted in C, not dispatch)
   - Portable 64-bit acceleration for stride-3 scans in generated BF
-  - Walking loops with arithmetic bodies → single-op internal loops
   - Pointer movement fused into every op (`off` field)
 - **Threaded dispatch**: computed-goto on GCC/Clang, switch elsewhere (`-DBF_USE_CGOTO=0/1`)
 - **Bounds-safe by default**: every access checked; the tape also carries
