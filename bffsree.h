@@ -66,10 +66,18 @@
 typedef int16_t bf_off_t;
 
 // Reconstruct walking LOOPRUN bodies as affine maps over the cell ring
-// (new[i] = bias[i] + Σ c[i][j]*old[j]) and apply them as straight-line
-// arithmetic. Off by -DBF_AFFINE=0.
+// (new[i] = bias[i] + Σ c[i][j]*old[j]). ./bffsree -c prints the maps.
+// Runtime apply of the generic sparse map is off by default: it is a
+// second interpreter of coefficients and lost to the existing op walk
+// on short bodies (same lesson as the windowed LOOPRUN walker).
 #ifndef BF_AFFINE
 #define BF_AFFINE 1
+#endif
+#ifndef BF_AFFINE_APPLY
+#define BF_AFFINE_APPLY 0
+#endif
+#ifndef BF_AFFINE_MIN_VAL
+#define BF_AFFINE_MIN_VAL 5
 #endif
 
 #if BF_AFFINE
@@ -201,6 +209,7 @@ typedef struct bf_affine {
 
 const bf_affine *bf_affine_get(unsigned id);
 int              bf_affine_count(void);
+int              bf_affine_from_body(const bf_op *body, int n, bf_affine *out);
 int              bf_affine_format(const bf_affine *m, char *buf, int buflen);
 #endif
 

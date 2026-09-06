@@ -301,6 +301,7 @@ static void bf_affine_reset(void) {
     bf_affine_cap = 0;
 }
 
+#if BF_AFFINE_APPLY
 static int bf_affine_intern(const bf_affine *m) {
     if (bf_affine_npool >= 0xFFFF) return 0;
     if (bf_affine_npool >= bf_affine_cap) {
@@ -314,6 +315,7 @@ static int bf_affine_intern(const bf_affine *m) {
     bf_affine_npool++;
     return bf_affine_npool;
 }
+#endif
 
 static int bf_aff_idx(int off) {
     return off + BF_AFF_MID;
@@ -374,7 +376,7 @@ static void bf_aff_scale(bf_aff_expr *dst, bf_cell k) {
     dst->b = (bf_cell)(k * dst->b);
 }
 
-static int bf_affine_from_body(const bf_op *body, int n, bf_affine *out) {
+int bf_affine_from_body(const bf_op *body, int n, bf_affine *out) {
     bf_aff_expr cells[BF_AFF_SPAN];
     int cur = 0, i, j, off, src_i, dst_i, sid;
     int src_map[BF_AFF_SPAN];
@@ -513,7 +515,7 @@ int bf_affine_format(const bf_affine *m, char *buf, int buflen) {
 // ----------------------------
 static void bf_markLoopRuns(bf_op* bfo, int pc) {
     int i, j, n, c, okb;
-#if BF_AFFINE
+#if BF_AFFINE && BF_AFFINE_APPLY
     bf_affine map;
 #endif
 
@@ -529,8 +531,9 @@ static void bf_markLoopRuns(bf_op* bfo, int pc) {
         }
         if (!okb) continue;
         bfo[i].cmd = bfo_LOOPRUN;
-#if BF_AFFINE
-        if (bf_affine_from_body(bfo + i + 1, n - 1, &map)) {
+#if BF_AFFINE && BF_AFFINE_APPLY
+        if (n >= BF_AFFINE_MIN_VAL &&
+            bf_affine_from_body(bfo + i + 1, n - 1, &map)) {
             int id = bf_affine_intern(&map);
             if (id > 0) bfo[i].aux = (uint16_t)id;
         }
@@ -647,15 +650,19 @@ int bf_Optimize(void** bfoptr, char* chars, int proglen, int printMetrics) {
                proglen, pc, proglen, (int)(pc * (int)sizeof(bf_op)), (int)sizeof(bf_op));
 #if BF_AFFINE
         {
-            int nrun = 0, naff = 0, k;
+            int nrun = 0, naff = 0, napp = 0, k;
+            bf_affine tmp;
             for (k = 0; k < pc; k++) {
-                if (bfo[k].cmd == bfo_LOOPRUN) {
-                    nrun++;
-                    if (bfo[k].aux) naff++;
-                }
+                if (bfo[k].cmd != bfo_LOOPRUN) continue;
+                nrun++;
+                if (bf_affine_from_body(bfo + k + 1, bfo[k].val - 1, &tmp))
+                    naff++;
+                if (bfo[k].aux) napp++;
             }
-            printf("//-- Affine: reconstructed %d/%d LOOPRUN bodies as cell-ring maps\n",
-                   naff, nrun);
+            printf("//-- Affine: reconstructed %d/%d LOOPRUN bodies as cell-ring maps"
+                   " (%d interned for apply%s)\n",
+                   naff, nrun, napp,
+                   BF_AFFINE_APPLY ? "" : ", apply off");
         }
 #endif
     }

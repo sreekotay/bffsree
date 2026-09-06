@@ -326,7 +326,7 @@ static inline bf_cell* bf_apply_rew(bf_cell* p, const bf_op* rew) {
 }
 
 #if !BF_PROFILE
-#if BF_AFFINE
+#if BF_AFFINE && BF_AFFINE_APPLY
 // Apply a reconstructed body map: snapshot the source cells, write
 // the sparse affine result, hop. No inner opcode switch.
 static BF_NOINLINE bf_cell* bf_looprun_affine(
@@ -361,7 +361,7 @@ static BF_NOINLINE bf_cell* bf_looprun_affine(
 #endif
 
 static inline bf_cell* bf_looprun_rest(bf_cell* p, bf_op* L) {
-#if BF_AFFINE
+#if BF_AFFINE && BF_AFFINE_APPLY
     if (L->aux) {
         const bf_affine* am = bf_affine_get(L->aux);
         if (am) return bf_looprun_affine(p, (bf_cell)L->buf, L->off, am);

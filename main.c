@@ -48,11 +48,16 @@ void bffsree_Print(bf_VM* vm, char* inp, int lang) {
             printf("  [%3d] %-10s val=%-6d off=%-4d buf=%d\n",
                    i, name, bfo[i].val, bfo[i].off, bfo[i].buf);
 #if BF_AFFINE
-            if (bfo[i].cmd == bfo_LOOPRUN && bfo[i].aux) {
-                const bf_affine *m = bf_affine_get(bfo[i].aux);
+            if (bfo[i].cmd == bfo_LOOPRUN) {
+                const bf_affine *m = bfo[i].aux ? bf_affine_get(bfo[i].aux) : 0;
+                bf_affine tmp;
                 char line[512];
+                if (!m && i + bfo[i].val <= vm->progLen_op &&
+                    bf_affine_from_body(bfo + i + 1, bfo[i].val - 1, &tmp))
+                    m = &tmp;
                 if (m && bf_affine_format(m, line, (int)sizeof line))
-                    printf("        // affine %s\n", line);
+                    printf("        // affine%s %s\n",
+                           bfo[i].aux ? " apply" : "", line);
             }
 #endif
         }

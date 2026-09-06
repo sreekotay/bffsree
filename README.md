@@ -48,10 +48,12 @@ with a timeout.
     keep the current frame in registers, then hop a whole record
   - Walking loops with arithmetic bodies → single-op internal loops
   - Affine reconstruction: a walking `LOOPRUN` body is composed into
-    `new[i] = bias + Σ c[i][j]*old[j]` (mod the cell ring) and applied
-    as sparse arithmetic instead of switching on each inner op. `./bffsree -c`
-    prints the recovered maps. Not program-specific: hop and window come
-    from the IR, the same way fib/tree hop-3 and mandelbrot hop-9 do.
+    `new[i] = bias + Σ c[i][j]*old[j]` (mod the cell ring). `./bffsree -c`
+    prints the recovered maps; `-m` counts how many lifted. Hop and
+    window come from the IR (fib/tree hop-3 and mandelbrot hop-9 share
+    the same path). Runtime apply of the generic map is off by default
+    (`-DBF_AFFINE_APPLY=1` to experiment): a coefficient interpreter
+    lost to the existing op walk on short bodies.
   - Portable 64-bit acceleration for stride-3 scans in generated BF
   - Pointer movement fused into every op (`off` field)
 - **Threaded dispatch**: computed-goto on GCC/Clang, switch elsewhere (`-DBF_USE_CGOTO=0/1`)
