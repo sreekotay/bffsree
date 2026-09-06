@@ -251,10 +251,16 @@ typedef struct bf_seg {
 // Body templates: whole-body straight-line runners for op-kind
 // signatures that dominate the corpus. Parameters (vals/offs/bufs)
 // are read from the parameter block into locals once per entry.
+// Signatures are structural strings over the body: V VAL, M VAL_MZ,
+// X VAL_MUL, Z VAL_ZERO, Q MUL_MUL, N NOOP, S PTR_S, R LOOPRUN,
+// m MZSCAN, v VALSCAN, {..} nested loop.
 enum {
     BF_TMPL_NONE = 0,
-    BF_TMPL_ZV_RUN_MV     /* VAL_ZERO VAL | LOOPRUN | VAL_MZ VAL */
+    BF_TMPL_ZV_R_MV,        /* "ZVRMV"        */
+    BF_TMPL_VM_VRS_S_m_MV   /* "VM{VRS}SmMV"  */
 };
+
+int bf_nest_signature(const bf_op *bfo, int s, char *buf, int buflen);
 
 typedef struct bf_nest {
     uint8_t nseg;

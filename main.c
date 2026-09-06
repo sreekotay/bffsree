@@ -64,11 +64,16 @@ void bffsree_Print(bf_VM* vm, char* inp, int lang) {
                     }
             }
 #endif
+            if (bfo[i].cmd == bfo_FWD || bfo[i].cmd == bfo_NEST) {
+                char sig[128];
+                if (bf_nest_signature(bfo, i, sig, (int)sizeof sig) >= 0)
+                    printf("        // body \"%s\"\n", sig);
+            }
             if (bfo[i].cmd == bfo_NEST) {
                 const bf_nest *n = bf_nest_get(bfo[i].aux);
                 int s;
                 if (n) {
-                    printf("        // nest:");
+                    printf("        // nest: template %d,", n->tmpl);
                     for (s = 0; s < n->nseg; s++) {
                         const bf_seg *g = &n->seg[s];
                         switch (g->kind) {

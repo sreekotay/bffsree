@@ -660,10 +660,10 @@ static inline bf_cell* bf_nest_seg(bf_cell* p, bf_op* L, const bf_seg* g) {
     }
 }
 
-// Template: VAL_ZERO VAL | LOOPRUN | VAL_MZ VAL. Everything the body
-// needs is in locals; the only call is the (already specialized)
-// LOOPRUN helper, and only when its cell is nonzero.
-static BF_NOINLINE bf_cell* bf_nest_t_zv_run_mv(bf_cell* p, bf_op* L) {
+// Template "ZVRMV": VAL_ZERO VAL | LOOPRUN | VAL_MZ VAL. Everything
+// the body needs is in locals; the only call is the (already
+// specialized) LOOPRUN helper, and only when its cell is nonzero.
+static BF_NOINLINE bf_cell* bf_nest_t_zv_r_mv(bf_cell* p, bf_op* L) {
     bf_op* Z  = L + 1;
     bf_op* V1 = L + 2;
     bf_op* R  = L + 3;
@@ -701,11 +701,87 @@ static BF_NOINLINE bf_cell* bf_nest_t_zv_run_mv(bf_cell* p, bf_op* L) {
     return p;
 }
 
+// Template "VM{VRS}SmMV": VAL VAL_MZ | { VAL LOOPRUN PTR_S } | PTR_S
+// MZSCAN | VAL_MZ VAL. The nested loop is inlined; every loop-carrying
+// piece tests its cell before calling its helper.
+static BF_NOINLINE bf_cell* bf_nest_t_vm_vrs_s_m_mv(bf_cell* p, bf_op* L) {
+    bf_op* V1 = L + 1;
+    bf_op* M1 = L + 2;
+    bf_op* F  = L + 3;
+    bf_op* V2 = F + 1;
+    bf_op* R  = F + 2;
+    bf_op* RR = R + R->val;
+    bf_op* S1 = RR + 1;
+    bf_op* FR = F + F->val;
+    bf_op* S2 = FR + 1;
+    bf_op* Z  = S2 + 1;
+    bf_op* M2 = Z + 3;
+    bf_op* V3 = Z + 4;
+    const bf_cell fbuf  = (bf_cell)L->buf;  const int foff  = L->off;
+    const bf_cell v1    = (bf_cell)V1->val; const int v1off = V1->off;
+    const int     m1buf = M1->buf;          const int m1off = M1->off;
+    const bf_cell m1val = (bf_cell)M1->val;
+    const bf_cell Fbuf  = (bf_cell)F->buf;  const int Foff  = F->off;
+    const bf_cell v2    = (bf_cell)V2->val; const int v2off = V2->off;
+    const int     rsub  = R->sub;
+    const bf_cell rbuf  = (bf_cell)RR->buf; const int roff  = RR->off;
+    const int     s1    = S1->val;          const int s1off = S1->off;
+    const bf_cell FRbuf = (bf_cell)FR->buf; const int FRoff = FR->off;
+    const int     s2    = S2->val;          const int s2off = S2->off;
+    const int     m2buf = M2->buf;          const int m2off = M2->off;
+    const bf_cell m2val = (bf_cell)M2->val;
+    const bf_cell v3    = (bf_cell)V3->val; const int v3off = V3->off;
+
+    *p += fbuf;
+    p += foff;
+    for (;;) {
+        *p += v1;
+        p += v1off;
+        p[m1buf] += (bf_cell)(m1val * *p);
+        *p = 0;
+        p += m1off;
+        if (*p) {
+            *p += Fbuf;
+            p += Foff;
+            for (;;) {
+                *p += v2;
+                p += v2off;
+                if (*p) p = bf_looprun_taken(p, R, rsub);
+                *p += rbuf;
+                p += roff;
+                if (*p) p = bf_apply_ptr_s(p, s1);
+                p += s1off;
+                if (*p == 0) break;
+                *p += Fbuf;
+                p += Foff;
+            }
+        }
+        *p += FRbuf;
+        p += FRoff;
+        if (*p) p = bf_apply_ptr_s(p, s2);
+        p += s2off;
+        p = bf_run_mzscan(p, Z);
+        p[m2buf] += (bf_cell)(m2val * *p);
+        *p = 0;
+        p += m2off;
+        *p += v3;
+        p += v3off;
+        if (*p == 0) break;
+        *p += fbuf;
+        p += foff;
+    }
+    return p;
+}
+
 // *p != 0 on entry. Stops at the failed loop test (REW not applied).
 static BF_NOINLINE bf_cell* bf_nest_run(bf_cell* p, bf_op* L) {
     const bf_nest* n = bf_nest_get(L->aux);
     if (!n) return bf_exec_fwd(p, L);
-    if (n->tmpl == BF_TMPL_ZV_RUN_MV) return bf_nest_t_zv_run_mv(p, L);
+    switch (n->tmpl) {
+    case BF_TMPL_ZV_R_MV:       return bf_nest_t_zv_r_mv(p, L);
+    case BF_TMPL_VM_VRS_S_m_MV: return bf_nest_t_vm_vrs_s_m_mv(p, L);
+    default: break;
+    }
     *p += (bf_cell)L->buf;
     p += L->off;
     for (;;) {

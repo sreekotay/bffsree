@@ -609,6 +609,49 @@ static void bf_nest_reset(void) {
     bf_nest_cap = 0;
 }
 
+// Structural signature of a loop body (see BF_TMPL_* in the header).
+// Returns the length, or -1 if it does not fit or the body contains
+// an op with no letter.
+int bf_nest_signature(const bf_op *bfo, int s, char *buf, int buflen) {
+    int e = s + bfo[s].val, j = s + 1, n = 0;
+    while (j < e) {
+        int c = bfo[j].cmd;
+        char ch;
+        switch (c) {
+        case bfo_VAL:      ch = 'V'; break;
+        case bfo_VAL_MZ:   ch = 'M'; break;
+        case bfo_VAL_MUL:  ch = 'X'; break;
+        case bfo_VAL_ZERO: ch = 'Z'; break;
+        case bfo_MUL_MUL:  ch = 'Q'; break;
+        case bfo_NOOP:     ch = 'N'; break;
+        case bfo_PTR_S:    ch = 'S'; break;
+        case bfo_LOOPRUN:  ch = 'R'; break;
+        case bfo_MZSCAN:   ch = 'm'; break;
+        case bfo_VALSCAN:  ch = 'v'; break;
+        case bfo_FWD:
+        case bfo_NEST:     ch = '{'; break;
+        default:           return -1;
+        }
+        if (n + 2 >= buflen) return -1;
+        buf[n++] = ch;
+        if (ch == '{') {
+            int k = bf_nest_signature(bfo, j, buf + n, buflen - n);
+            if (k < 0 || n + k + 2 >= buflen) return -1;
+            n += k;
+            buf[n++] = '}';
+            j += bfo[j].val + 1;
+        } else if (ch == 'R') {
+            j += bfo[j].val + 1;
+        } else if (ch == 'm' || ch == 'v') {
+            j += 3;
+        } else {
+            j++;
+        }
+    }
+    buf[n] = 0;
+    return n;
+}
+
 #if BF_NEST
 static int bf_nest_intern(const bf_nest *n) {
     if (bf_nest_npool >= 0xFFFF) return 0;
@@ -676,15 +719,17 @@ static int bf_nest_compile(bf_op *bfo, int s, bf_nest *n) {
     return j == e;
 }
 
-// Match a compiled body against the template signatures by op kind.
+static const struct { const char *sig; int tmpl; } bf_templates[] = {
+    { "ZVRMV",       BF_TMPL_ZV_R_MV },
+    { "VM{VRS}SmMV", BF_TMPL_VM_VRS_S_m_MV },
+};
+
 static int bf_nest_template(const bf_op *bfo, int s) {
-    int e = s + bfo[s].val;
-    if (bfo[s + 1].cmd == bfo_VAL_ZERO && bfo[s + 2].cmd == bfo_VAL &&
-        bfo[s + 3].cmd == bfo_LOOPRUN) {
-        int r = s + 3 + bfo[s + 3].val;   /* LOOPRUN's REW */
-        if (r + 3 == e && bfo[r + 1].cmd == bfo_VAL_MZ && bfo[r + 2].cmd == bfo_VAL)
-            return BF_TMPL_ZV_RUN_MV;
-    }
+    char sig[64];
+    unsigned k;
+    if (bf_nest_signature(bfo, s, sig, (int)sizeof sig) < 0) return BF_TMPL_NONE;
+    for (k = 0; k < sizeof bf_templates / sizeof bf_templates[0]; k++)
+        if (strcmp(sig, bf_templates[k].sig) == 0) return bf_templates[k].tmpl;
     return BF_TMPL_NONE;
 }
 
