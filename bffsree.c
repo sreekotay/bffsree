@@ -308,13 +308,33 @@ int bf_looprun_variant(const bf_op* L) {
 // Own translation-unit-style clone of PTR_S: the stride scan must not
 // share registers with computed-goto dispatch. Fib/tree spend almost
 // all their time here.
+// Stride scan, four cells per iteration. The four loads are
+// independent, so the not-taken tests overlap; the scalar loop is
+// bound by one taken branch per cell. Reads up to three strides past
+// the first zero: strides are under 128 cells and the sentinel pads
+// are BF_TAPE_PAD, so that stays inside the allocation. Eight-way and
+// a branchless zero-mask combine were both measured slower.
+#ifndef BF_SCAN_UNROLL
+#define BF_SCAN_UNROLL 1
+#endif
 static BF_NOINLINE bf_cell* bf_apply_ptr_s(bf_cell* p, int stride) {
 #if BF_WORD_SCAN3
     if (stride == 3) return bf_word_scan3_forward(p);
     if (stride == -3) return bf_word_scan3_backward(p);
 #endif
+#if BF_SCAN_UNROLL
+    for (;;) {
+        bf_cell a = p[0], b = p[stride], c = p[2 * stride], d = p[3 * stride];
+        if (a == 0) return p;
+        if (b == 0) return p + stride;
+        if (c == 0) return p + 2 * stride;
+        if (d == 0) return p + 3 * stride;
+        p += 4 * stride;
+    }
+#else
     while (*p) p += stride;
     return p;
+#endif
 }
 
 #if !BF_PROFILE
