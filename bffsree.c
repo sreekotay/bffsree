@@ -275,89 +275,6 @@ static BF_NOINLINE bf_cell* bf_looprun_generic(bf_cell* p, bf_op* P) {
     return bf_exec_fwd(p, P);
 }
 
-#if BF_CELL_BITS == 8 && !BF_PROFILE
-// Body working set relative to the first body cell. 1 if every op is
-// tape arithmetic and the touched cells fit in 8 bytes.
-static int bf_looprun_analyze_window(const bf_op* P, int* lo_out, int* net_out) {
-    int off = 0, lo = 0, hi = 0;
-    const bf_op* b;
-    const bf_op* end = P + P->val;
-
-    if (P->val < 2) return 0;
-    for (b = P + 1; b != end; b++) {
-        int t = off;
-        if (t < lo) lo = t;
-        if (t > hi) hi = t;
-        switch (b->cmd) {
-        case bfo_VAL:
-        case bfo_VAL_ZERO:
-        case bfo_NOOP:
-            break;
-        case bfo_VAL_MZ:
-        case bfo_VAL_MUL:
-        case bfo_MUL_MUL:
-            t = off + b->buf;
-            if (t < lo) lo = t;
-            if (t > hi) hi = t;
-            break;
-        default:
-            return 0;
-        }
-        off += b->off;
-    }
-    if (hi - lo + 1 > 8) return 0;
-    *lo_out = lo;
-    *net_out = off;
-    return 1;
-}
-
-// Load the 8-cell window once per iteration, apply the body, store, hop.
-static BF_NOINLINE bf_cell* bf_looprun_window8(bf_cell* p, bf_op* P, int lo, int net) {
-    if (*p) {
-        *p += (bf_cell)P->buf;
-        p += P->off;
-        for (;;) {
-            bf_cell w[8];
-            int off = 0;
-            bf_op* b;
-            memcpy(w, p + lo, 8);
-            for (b = P + 1; b != P + P->val; b++) {
-                int i = off - lo;
-                switch (b->cmd) {
-                case bfo_VAL:
-                    w[i] += (bf_cell)b->val;
-                    break;
-                case bfo_VAL_ZERO:
-                    w[i] = (bf_cell)b->val;
-                    break;
-                case bfo_VAL_MZ: {
-                    bf_cell src = w[i];
-                    w[i + b->buf] += (bf_cell)(b->val * src);
-                    w[i] = 0;
-                    break;
-                }
-                case bfo_VAL_MUL:
-                    w[i + b->buf] += (bf_cell)(b->val * w[i]);
-                    break;
-                case bfo_MUL_MUL:
-                    w[i + b->buf] *= (bf_cell)(b->val * w[i]);
-                    break;
-                default:
-                    break;
-                }
-                off += b->off;
-            }
-            memcpy(p + lo, w, 8);
-            p += net;
-            if (*p == 0) break;
-            *p += (bf_cell)P->buf;
-            p += P->off;
-        }
-    }
-    return p;
-}
-#endif
-
 // Own translation-unit-style clone of PTR_S: the stride scan must not
 // share registers with computed-goto dispatch. Fib/tree spend almost
 // all their time here.
@@ -408,43 +325,34 @@ static inline bf_cell* bf_apply_rew(bf_cell* p, const bf_op* rew) {
     return p + rew->off;
 }
 
-static BF_NOINLINE bf_cell* bf_apply_looprun(bf_cell* p, bf_op* P) {
+static inline bf_cell* bf_run_looprun(bf_cell* p, bf_op* L) {
 #if BF_PROFILE
-    return bf_looprun_generic(p, P);
+    p = bf_looprun_generic(p, L);
 #else
-    if (P->val == 5 &&
-        P[1].cmd == bfo_VAL_MZ && P[1].val == 1 &&
-        P[2].cmd == bfo_VAL_MUL && P[2].val == 1 &&
-        P[3].cmd == bfo_VAL_MZ && P[3].val == 1 &&
-        P[4].cmd == bfo_VAL)
-        return bf_looprun_mz_mul_mz_val(
-            p, (bf_cell)P->buf, P->off,
-            P[1].buf, P[1].off, P[2].buf, P[2].off,
-            P[3].buf, P[3].off, (bf_cell)P[4].val, P[4].off);
-    if (P->val == 5 &&
-        P[1].cmd == bfo_VAL &&
-        P[2].cmd == bfo_VAL_MUL &&
-        P[3].cmd == bfo_VAL_MZ &&
-        P[4].cmd == bfo_VAL_MZ)
-        return bf_looprun_val_mul_mz_mz(
-            p, (bf_cell)P->buf, P->off,
-            (bf_cell)P[1].val, P[1].off,
-            P[2].val, P[2].buf, P[2].off,
-            P[3].val, P[3].buf, P[3].off,
-            P[4].val, P[4].buf, P[4].off);
-#if BF_CELL_BITS == 8
-    {
-        int lo, net;
-        if (bf_looprun_analyze_window(P, &lo, &net))
-            return bf_looprun_window8(p, P, lo, net);
+    if (L->val == 5 &&
+        L[1].cmd == bfo_VAL_MZ && L[1].val == 1 &&
+        L[2].cmd == bfo_VAL_MUL && L[2].val == 1 &&
+        L[3].cmd == bfo_VAL_MZ && L[3].val == 1 &&
+        L[4].cmd == bfo_VAL) {
+        p = bf_looprun_mz_mul_mz_val(
+            p, (bf_cell)L->buf, L->off,
+            L[1].buf, L[1].off, L[2].buf, L[2].off,
+            L[3].buf, L[3].off, (bf_cell)L[4].val, L[4].off);
+    } else if (L->val == 5 &&
+               L[1].cmd == bfo_VAL &&
+               L[2].cmd == bfo_VAL_MUL &&
+               L[3].cmd == bfo_VAL_MZ &&
+               L[4].cmd == bfo_VAL_MZ) {
+        p = bf_looprun_val_mul_mz_mz(
+            p, (bf_cell)L->buf, L->off,
+            (bf_cell)L[1].val, L[1].off,
+            L[2].val, L[2].buf, L[2].off,
+            L[3].val, L[3].buf, L[3].off,
+            L[4].val, L[4].buf, L[4].off);
+    } else {
+        p = bf_looprun_generic(p, L);
     }
 #endif
-    return bf_looprun_generic(p, P);
-#endif
-}
-
-static inline bf_cell* bf_run_looprun(bf_cell* p, bf_op* L) {
-    p = bf_apply_looprun(p, L);
     return bf_apply_rew(p, L + L->val);
 }
 
@@ -726,18 +634,51 @@ DONE:
         } while (0)
 #endif
 
-    // LOOPRUN: walking body interpreted out of line. Sentinel pads let
+    // LOOPRUN: walking body interpreted internally. Sentinel pads let
     // a walk leave the logical tape; one post-loop bounds check
-    // matches MZSCAN. Known 4-op shapes stay specialized; other
-    // bodies with an 8-cell working set use a windowed load/op/store.
+    // matches MZSCAN. Flat 4-op copy-walks are specialized; other
+    // bodies still switch on a tape pointer.
+#if BF_PROFILE
     #define _op_LOOPRUN(P) \
         do { \
-            tp = bf_apply_looprun(ptr + sp, (P)); \
+            tp = bf_looprun_generic(ptr + sp, (P)); \
             sp = (int)(tp - ptr); \
             _bf_bound_sp(); \
             (P) += (P)->val; \
             ptr[sp] += (bf_cell)(P)->buf; \
         } while (0)
+#else
+    #define _op_LOOPRUN(P) \
+        do { \
+            if ((P)->val == 5 && \
+                (P)[1].cmd == bfo_VAL_MZ && (P)[1].val == 1 && \
+                (P)[2].cmd == bfo_VAL_MUL && (P)[2].val == 1 && \
+                (P)[3].cmd == bfo_VAL_MZ && (P)[3].val == 1 && \
+                (P)[4].cmd == bfo_VAL) { \
+                tp = bf_looprun_mz_mul_mz_val( \
+                    ptr + sp, (bf_cell)(P)->buf, (P)->off, \
+                    (P)[1].buf, (P)[1].off, (P)[2].buf, (P)[2].off, \
+                    (P)[3].buf, (P)[3].off, (bf_cell)(P)[4].val, (P)[4].off); \
+            } else if ((P)->val == 5 && \
+                       (P)[1].cmd == bfo_VAL && \
+                       (P)[2].cmd == bfo_VAL_MUL && \
+                       (P)[3].cmd == bfo_VAL_MZ && \
+                       (P)[4].cmd == bfo_VAL_MZ) { \
+                tp = bf_looprun_val_mul_mz_mz( \
+                    ptr + sp, (bf_cell)(P)->buf, (P)->off, \
+                    (bf_cell)(P)[1].val, (P)[1].off, \
+                    (P)[2].val, (P)[2].buf, (P)[2].off, \
+                    (P)[3].val, (P)[3].buf, (P)[3].off, \
+                    (P)[4].val, (P)[4].buf, (P)[4].off); \
+            } else { \
+                tp = bf_looprun_generic(ptr + sp, (P)); \
+            } \
+            sp = (int)(tp - ptr); \
+            _bf_bound_sp(); \
+            (P) += (P)->val; \
+            ptr[sp] += (bf_cell)(P)->buf; \
+        } while (0)
+#endif
 
     // Dispatch tail, shared by both arms. BF_FAST drops the per-op
     // bounds check (sentinel pads keep accesses in-allocation).
