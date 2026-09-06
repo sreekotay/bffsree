@@ -67,18 +67,23 @@ typedef int16_t bf_off_t;
 
 // Reconstruct walking LOOPRUN bodies as affine maps over the cell ring
 // (new[i] = bias[i] + Σ c[i][j]*old[j]). ./bffsree -c prints the maps.
-// Runtime apply of the generic sparse map is off by default: it is a
-// second interpreter of coefficients and lost to the existing op walk
-// on short bodies (same lesson as the windowed LOOPRUN walker).
+// Small compiled trees (1-3 stores) get a straight-line evaluator
+// picked by shape — compile once, bind the window, eval many times.
+// Not an AST walk and not a coefficient-loop interpreter.
 #ifndef BF_AFFINE
 #define BF_AFFINE 1
 #endif
 #ifndef BF_AFFINE_APPLY
-#define BF_AFFINE_APPLY 0
+#define BF_AFFINE_APPLY 1
 #endif
-#ifndef BF_AFFINE_MIN_VAL
-#define BF_AFFINE_MIN_VAL 5
-#endif
+
+enum {
+    BF_AFF_NONE = 0,
+    BF_AFF_S1   = 1,  /* 1 store, <=3 terms */
+    BF_AFF_S2Z  = 2,  /* 2 stores: one constant, one 1-2 term dest */
+    BF_AFF_S2   = 3,  /* 2 stores, each <=3 terms */
+    BF_AFF_S3   = 4   /* 3 stores, each <=3 terms */
+};
 
 #if BF_AFFINE
 #define BF_AFFINE_MAX_STORE 24
@@ -196,6 +201,7 @@ typedef struct bf_affine {
     int16_t hop;
     int16_t src_off[BF_AFFINE_MAX_SRC];
     uint8_t nsrc, nstore, nterm;
+    uint8_t kind;   /* BF_AFF_S1 / S2Z / S2 / S3, or NONE */
     struct {
         int16_t dst;
         bf_cell bias;
@@ -210,7 +216,9 @@ typedef struct bf_affine {
 const bf_affine *bf_affine_get(unsigned id);
 int              bf_affine_count(void);
 int              bf_affine_from_body(const bf_op *body, int n, bf_affine *out);
+int              bf_affine_classify(bf_affine *m);
 int              bf_affine_format(const bf_affine *m, char *buf, int buflen);
+const char      *bf_affine_kind_name(int kind);
 #endif
 
 // -----------------------------

@@ -471,7 +471,41 @@ int bf_affine_from_body(const bf_op *body, int n, bf_affine *out) {
         }
         out->nstore++;
     }
+    bf_affine_classify(out);
     return 1;
+}
+
+int bf_affine_classify(bf_affine *m) {
+    int i, maxnt = 0, nzero = 0, nsmall = 0;
+
+    m->kind = BF_AFF_NONE;
+    if (!m || m->nsrc > 4) return BF_AFF_NONE;
+    for (i = 0; i < m->nstore; i++) {
+        int nt = m->store[i].nt;
+        if (nt > 3) return BF_AFF_NONE;
+        if (nt > maxnt) maxnt = nt;
+        if (nt == 0) nzero++;
+        else if (nt <= 2) nsmall++;
+    }
+    if (m->nstore == 1)
+        m->kind = BF_AFF_S1;
+    else if (m->nstore == 2 && nzero == 1 && nsmall == 1)
+        m->kind = BF_AFF_S2Z;
+    else if (m->nstore == 2)
+        m->kind = BF_AFF_S2;
+    else if (m->nstore == 3)
+        m->kind = BF_AFF_S3;
+    return (int)m->kind;
+}
+
+const char *bf_affine_kind_name(int kind) {
+    switch (kind) {
+    case BF_AFF_S1:  return "s1";
+    case BF_AFF_S2Z: return "s2z";
+    case BF_AFF_S2:  return "s2";
+    case BF_AFF_S3:  return "s3";
+    default:         return 0;
+    }
 }
 
 int bf_affine_format(const bf_affine *m, char *buf, int buflen) {
@@ -532,8 +566,7 @@ static void bf_markLoopRuns(bf_op* bfo, int pc) {
         if (!okb) continue;
         bfo[i].cmd = bfo_LOOPRUN;
 #if BF_AFFINE && BF_AFFINE_APPLY
-        if (n >= BF_AFFINE_MIN_VAL &&
-            bf_affine_from_body(bfo + i + 1, n - 1, &map)) {
+        if (bf_affine_from_body(bfo + i + 1, n - 1, &map) && map.kind) {
             int id = bf_affine_intern(&map);
             if (id > 0) bfo[i].aux = (uint16_t)id;
         }
@@ -651,18 +684,23 @@ int bf_Optimize(void** bfoptr, char* chars, int proglen, int printMetrics) {
 #if BF_AFFINE
         {
             int nrun = 0, naff = 0, napp = 0, k;
+            int ns1 = 0, ns2z = 0, ns2 = 0, ns3 = 0;
             bf_affine tmp;
             for (k = 0; k < pc; k++) {
                 if (bfo[k].cmd != bfo_LOOPRUN) continue;
                 nrun++;
-                if (bf_affine_from_body(bfo + k + 1, bfo[k].val - 1, &tmp))
+                if (bf_affine_from_body(bfo + k + 1, bfo[k].val - 1, &tmp)) {
                     naff++;
+                    if (tmp.kind == BF_AFF_S1) ns1++;
+                    else if (tmp.kind == BF_AFF_S2Z) ns2z++;
+                    else if (tmp.kind == BF_AFF_S2) ns2++;
+                    else if (tmp.kind == BF_AFF_S3) ns3++;
+                }
                 if (bfo[k].aux) napp++;
             }
-            printf("//-- Affine: reconstructed %d/%d LOOPRUN bodies as cell-ring maps"
-                   " (%d interned for apply%s)\n",
-                   naff, nrun, napp,
-                   BF_AFFINE_APPLY ? "" : ", apply off");
+            printf("//-- Affine: reconstructed %d/%d LOOPRUN bodies"
+                   " (eval %d: s1=%d s2z=%d s2=%d s3=%d)\n",
+                   naff, nrun, napp, ns1, ns2z, ns2, ns3);
         }
 #endif
     }

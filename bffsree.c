@@ -327,29 +327,111 @@ static inline bf_cell* bf_apply_rew(bf_cell* p, const bf_op* rew) {
 
 #if !BF_PROFILE
 #if BF_AFFINE && BF_AFFINE_APPLY
-// Apply a reconstructed body map: snapshot the source cells, write
-// the sparse affine result, hop. No inner opcode switch.
-static BF_NOINLINE bf_cell* bf_looprun_affine(
+// Straight-line eval of a compiled affine tree. Snapshot the bound
+// window, write dests from old[], hop. Shape is picked once per
+// LOOPRUN entry (kind), not per hop and not by program name.
+static inline void bf_aff_load4(const bf_cell* p, const bf_affine* m, bf_cell old[4])
+{
+    old[0] = old[1] = old[2] = old[3] = 0;
+    if (m->nsrc > 0) old[0] = p[m->src_off[0]];
+    if (m->nsrc > 1) old[1] = p[m->src_off[1]];
+    if (m->nsrc > 2) old[2] = p[m->src_off[2]];
+    if (m->nsrc > 3) old[3] = p[m->src_off[3]];
+}
+
+static inline bf_cell bf_aff_acc(const bf_affine* m, int s, const bf_cell old[4])
+{
+    bf_cell v = m->store[s].bias;
+    unsigned t0 = m->store[s].t0, nt = m->store[s].nt;
+    if (nt > 0) v = (bf_cell)(v + m->term[t0].k * old[m->term[t0].src]);
+    if (nt > 1) v = (bf_cell)(v + m->term[t0 + 1].k * old[m->term[t0 + 1].src]);
+    if (nt > 2) v = (bf_cell)(v + m->term[t0 + 2].k * old[m->term[t0 + 2].src]);
+    return v;
+}
+
+static BF_NOINLINE bf_cell* bf_aff_walk_s1(
     bf_cell* p, bf_cell fbuf, int foff, const bf_affine* m)
 {
     if (*p) {
         *p += fbuf;
         p += foff;
         for (;;) {
-            bf_cell old[BF_AFFINE_MAX_SRC];
-            bf_cell neu[BF_AFFINE_MAX_STORE];
-            unsigned i, j;
-            for (i = 0; i < m->nsrc; i++)
-                old[i] = p[m->src_off[i]];
-            for (i = 0; i < m->nstore; i++) {
-                bf_cell v = m->store[i].bias;
-                unsigned t0 = m->store[i].t0;
-                for (j = 0; j < m->store[i].nt; j++)
-                    v = (bf_cell)(v + m->term[t0 + j].k * old[m->term[t0 + j].src]);
-                neu[i] = v;
-            }
-            for (i = 0; i < m->nstore; i++)
-                p[m->store[i].dst] = neu[i];
+            bf_cell old[4];
+            bf_aff_load4(p, m, old);
+            p[m->store[0].dst] = bf_aff_acc(m, 0, old);
+            p += m->hop;
+            if (*p == 0) break;
+            *p += fbuf;
+            p += foff;
+        }
+    }
+    return p;
+}
+
+static BF_NOINLINE bf_cell* bf_aff_walk_s2z(
+    bf_cell* p, bf_cell fbuf, int foff, const bf_affine* m)
+{
+    int z = (m->store[0].nt == 0) ? 0 : 1;
+    int a = 1 - z;
+    if (*p) {
+        *p += fbuf;
+        p += foff;
+        for (;;) {
+            bf_cell old[4], v;
+            unsigned t0 = m->store[a].t0, nt = m->store[a].nt;
+            bf_aff_load4(p, m, old);
+            p[m->store[z].dst] = m->store[z].bias;
+            v = m->store[a].bias;
+            v = (bf_cell)(v + m->term[t0].k * old[m->term[t0].src]);
+            if (nt > 1)
+                v = (bf_cell)(v + m->term[t0 + 1].k * old[m->term[t0 + 1].src]);
+            p[m->store[a].dst] = v;
+            p += m->hop;
+            if (*p == 0) break;
+            *p += fbuf;
+            p += foff;
+        }
+    }
+    return p;
+}
+
+static BF_NOINLINE bf_cell* bf_aff_walk_s2(
+    bf_cell* p, bf_cell fbuf, int foff, const bf_affine* m)
+{
+    if (*p) {
+        *p += fbuf;
+        p += foff;
+        for (;;) {
+            bf_cell old[4], n0, n1;
+            bf_aff_load4(p, m, old);
+            n0 = bf_aff_acc(m, 0, old);
+            n1 = bf_aff_acc(m, 1, old);
+            p[m->store[0].dst] = n0;
+            p[m->store[1].dst] = n1;
+            p += m->hop;
+            if (*p == 0) break;
+            *p += fbuf;
+            p += foff;
+        }
+    }
+    return p;
+}
+
+static BF_NOINLINE bf_cell* bf_aff_walk_s3(
+    bf_cell* p, bf_cell fbuf, int foff, const bf_affine* m)
+{
+    if (*p) {
+        *p += fbuf;
+        p += foff;
+        for (;;) {
+            bf_cell old[4], n0, n1, n2;
+            bf_aff_load4(p, m, old);
+            n0 = bf_aff_acc(m, 0, old);
+            n1 = bf_aff_acc(m, 1, old);
+            n2 = bf_aff_acc(m, 2, old);
+            p[m->store[0].dst] = n0;
+            p[m->store[1].dst] = n1;
+            p[m->store[2].dst] = n2;
             p += m->hop;
             if (*p == 0) break;
             *p += fbuf;
@@ -364,7 +446,17 @@ static inline bf_cell* bf_looprun_rest(bf_cell* p, bf_op* L) {
 #if BF_AFFINE && BF_AFFINE_APPLY
     if (L->aux) {
         const bf_affine* am = bf_affine_get(L->aux);
-        if (am) return bf_looprun_affine(p, (bf_cell)L->buf, L->off, am);
+        if (am) {
+            bf_cell fbuf = (bf_cell)L->buf;
+            int foff = L->off;
+            switch (am->kind) {
+            case BF_AFF_S1:  return bf_aff_walk_s1(p, fbuf, foff, am);
+            case BF_AFF_S2Z: return bf_aff_walk_s2z(p, fbuf, foff, am);
+            case BF_AFF_S2:  return bf_aff_walk_s2(p, fbuf, foff, am);
+            case BF_AFF_S3:  return bf_aff_walk_s3(p, fbuf, foff, am);
+            default: break;
+            }
+        }
     }
 #endif
     return bf_looprun_generic(p, L);

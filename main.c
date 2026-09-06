@@ -56,8 +56,12 @@ void bffsree_Print(bf_VM* vm, char* inp, int lang) {
                     bf_affine_from_body(bfo + i + 1, bfo[i].val - 1, &tmp))
                     m = &tmp;
                 if (m && bf_affine_format(m, line, (int)sizeof line))
-                    printf("        // affine%s %s\n",
-                           bfo[i].aux ? " apply" : "", line);
+                    {
+                        const char *kn = (bfo[i].aux && m->kind)
+                            ? bf_affine_kind_name((int)m->kind) : 0;
+                        printf("        // affine%s%s %s\n",
+                               kn ? " " : "", kn ? kn : "", line);
+                    }
             }
 #endif
         }
