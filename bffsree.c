@@ -138,6 +138,7 @@ static BF_NOINLINE bf_cell* bf_mzscan_copy(bf_cell* p, int foff, int dest, int b
     return p;
 }
 
+// Hottest dest-9 slides: lane +1 / +2 with boff = -(9+lane).
 static BF_NOINLINE bf_cell* bf_mzscan_copy9_from1(bf_cell* p) {
     if (*p) {
         p += 1;
@@ -167,11 +168,54 @@ static BF_NOINLINE bf_cell* bf_mzscan_copy9_from2(bf_cell* p) {
     }
     return p;
 }
+
+// Slide one lane into the next 9-cell frame: p[9] += *p; *p = 0.
+// Any stride-9 record; dest is fixed at 9.
+static BF_NOINLINE bf_cell* bf_mzscan_slide9(bf_cell* p, int foff, int boff) {
+    if (*p) {
+        p += foff;
+        for (;;) {
+            bf_cell v = *p;
+            *p = 0;
+            p[9] += v;
+            p += boff;
+            if (*p == 0) break;
+            p += foff;
+        }
+    }
+    return p;
+}
 #endif
 
 #if !BF_PROFILE
-// Hottest LOOPRUN shape on mandelbrot: decrement/walk, then
-// VAL_MZ, VAL_MUL, VAL_MZ, VAL. Straight-line, no inner switch.
+// VAL_MZ / VAL_MUL / VAL_MZ / VAL that hops one 9-cell frame. The
+// working cells sit in one record; keep them in locals and step +9.
+static BF_NOINLINE bf_cell* bf_frame9_mz_mul_mz_inc(
+    bf_cell* p, bf_cell fbuf, int lane, int acc, bf_cell add)
+{
+    if (*p) {
+        *p += fbuf;
+        p += lane;
+        for (;;) {
+            bf_cell* base = p - lane;
+            bf_cell t = *p;
+            bf_cell v0;
+            *p = 0;
+            v0 = (bf_cell)(base[0] + t);
+            *p = v0;
+            base[acc] = (bf_cell)(base[acc] + v0);
+            base[0] = add;
+            p = base + 9;
+            if (*p == 0) break;
+            *p += fbuf;
+            p += lane;
+        }
+    }
+    return p;
+}
+
+// Hottest LOOPRUN shape: decrement/walk, then VAL_MZ, VAL_MUL, VAL_MZ,
+// VAL. Uses a 9-cell frame walk when the hop and working set fit.
 static BF_NOINLINE bf_cell* bf_looprun_mz_mul_mz_val(
     bf_cell* p,
     bf_cell fbuf, int foff,
@@ -180,6 +224,11 @@ static BF_NOINLINE bf_cell* bf_looprun_mz_mul_mz_val(
     int c_buf, int c_off,
     bf_cell add, int d_off)
 {
+    if (d_off == 9 && a_off == -foff && b_off == 0 && c_off == 0 &&
+        a_buf == -foff && b_buf == foff &&
+        foff >= 0 && foff <= 8 && c_buf >= 0 && c_buf <= 8)
+        return bf_frame9_mz_mul_mz_inc(p, fbuf, foff, c_buf, add);
+
     if (*p) {
         *p += fbuf;
         p += foff;
@@ -310,11 +359,14 @@ static inline bf_cell* bf_run_looprun(bf_cell* p, bf_op* L) {
 static inline bf_cell* bf_run_mzscan(bf_cell* p, bf_op* M) {
 #if !BF_PROFILE
     if (M->buf == 0 && M[1].val == 1) {
-        if (M->off == 1 && M[1].buf == 9 && M[1].off == -10)
-            p = bf_mzscan_copy9_from1(p);
-        else if (M->off == 2 && M[1].buf == 9 && M[1].off == -11)
-            p = bf_mzscan_copy9_from2(p);
-        else
+        if (M[1].buf == 9) {
+            if (M->off == 1 && M[1].off == -10)
+                p = bf_mzscan_copy9_from1(p);
+            else if (M->off == 2 && M[1].off == -11)
+                p = bf_mzscan_copy9_from2(p);
+            else
+                p = bf_mzscan_slide9(p, M->off, M[1].off);
+        } else
             p = bf_mzscan_copy(p, M->off, M[1].buf, M[1].off);
         return bf_apply_rew(p, M + 2);
     }
@@ -562,11 +614,14 @@ DONE:
         do { \
             if ((P)->buf == 0 && (P)[1].val == 1) { \
                 tp = ptr + sp; \
-                if ((P)->off == 1 && (P)[1].buf == 9 && (P)[1].off == -10) \
-                    tp = bf_mzscan_copy9_from1(tp); \
-                else if ((P)->off == 2 && (P)[1].buf == 9 && (P)[1].off == -11) \
-                    tp = bf_mzscan_copy9_from2(tp); \
-                else \
+                if ((P)[1].buf == 9) { \
+                    if ((P)->off == 1 && (P)[1].off == -10) \
+                        tp = bf_mzscan_copy9_from1(tp); \
+                    else if ((P)->off == 2 && (P)[1].off == -11) \
+                        tp = bf_mzscan_copy9_from2(tp); \
+                    else \
+                        tp = bf_mzscan_slide9(tp, (P)->off, (P)[1].off); \
+                } else \
                     tp = bf_mzscan_copy(tp, (P)->off, (P)[1].buf, (P)[1].off); \
                 sp = (int)(tp - ptr); \
                 _bf_bound_sp(); \

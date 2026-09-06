@@ -262,65 +262,27 @@ static int bf_foldNoops(bf_op* bfo, int pc) {
 }
 
 // ----------------------------
-// Convert remaining walking loops into LOOPRUN superinstructions.
-// A body is walkable when every op is tape arithmetic, a pointer
-// scan, an already-collapsed scan/run, or a nested walkable loop.
-// PUT/GET keep the loop as FWD/REW so I/O still goes through Eval.
-// Must run after bf_foldNoops so jump distances are final. Body and
-// REW ops stay in place as the parameter block.
+// Convert remaining walking loops whose bodies are straight-line
+// arithmetic into LOOPRUN superinstructions. Must run after
+// bf_foldNoops so FWD jump distances are final. Body and REW ops stay
+// in place as the parameter block.
+// Nested scans/walks stay as separate ops: a generic nest interpreter
+// was slower than dispatching the specialized helpers from Eval.
 // ----------------------------
-static int bf_loop_is_walkable(const bf_op* bfo, int i, int pc);
-
-static int bf_range_is_walkable(const bf_op* bfo, int lo, int hi, int pc) {
-    int j = lo, n;
-
-    while (j < hi) {
-        switch (bfo[j].cmd) {
-        case bfo_NOOP:
-        case bfo_VAL:
-        case bfo_VAL_MZ:
-        case bfo_VAL_MUL:
-        case bfo_VAL_ZERO:
-        case bfo_MUL_MUL:
-        case bfo_PTR_S:
-            j++;
-            break;
-        case bfo_MZSCAN:
-        case bfo_VALSCAN:
-            if (j + 2 >= hi || bfo[j + 2].cmd != bfo_REW) return 0;
-            j += 3;
-            break;
-        case bfo_LOOPRUN:
-            n = bfo[j].val;
-            if (n < 2 || j + n >= hi || bfo[j + n].cmd != bfo_REW) return 0;
-            j += n + 1;
-            break;
-        case bfo_FWD:
-            n = bfo[j].val;
-            if (j + n >= hi || !bf_loop_is_walkable(bfo, j, pc)) return 0;
-            j += n + 1;
-            break;
-        default:
-            return 0;
-        }
-    }
-    return j == hi;
-}
-
-static int bf_loop_is_walkable(const bf_op* bfo, int i, int pc) {
-    int n = bfo[i].val;
-    if ((bfo[i].cmd != bfo_FWD && bfo[i].cmd != bfo_LOOPRUN) ||
-        n < 2 || i + n >= pc || bfo[i + n].cmd != bfo_REW)
-        return 0;
-    return bf_range_is_walkable(bfo, i + 1, i + n, pc);
-}
-
 static void bf_markLoopRuns(bf_op* bfo, int pc) {
-    int i;
+    int i, j, n, c, okb;
 
     for (i = 0; i < pc; i++) {
-        if (bfo[i].cmd == bfo_FWD && bf_loop_is_walkable(bfo, i, pc))
-            bfo[i].cmd = bfo_LOOPRUN;
+        if (bfo[i].cmd != bfo_FWD) continue;
+        n = bfo[i].val;
+        if (n < 2 || i + n >= pc || bfo[i + n].cmd != bfo_REW) continue;
+        okb = 1;
+        for (j = i + 1; j < i + n; j++) {
+            c = bfo[j].cmd;
+            if (c != bfo_VAL && c != bfo_VAL_MZ && c != bfo_VAL_MUL &&
+                c != bfo_VAL_ZERO && c != bfo_MUL_MUL) { okb = 0; break; }
+        }
+        if (okb) bfo[i].cmd = bfo_LOOPRUN;
     }
 }
 

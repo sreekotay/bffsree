@@ -44,9 +44,9 @@ with a timeout.
   - Run-length encoding for consecutive `+`, `-`, `<`, `>`
   - Loop collapse (`[-]` → zero, `[->+<]` → multiply-add, chained copies → `MUL_MUL`)
   - Scan loops (`[>]`, `[<<]`) → single strided scan op
-  - Specialized 9-cell walking copies for BFBench-style tape frames
-  - Walking loops whose bodies are arithmetic, scans, pointer scans, or
-    nested walking loops → one `LOOPRUN` (interpreted in C, not dispatch)
+  - 9-cell tape frames: lane slides to offset 9 and +9 copy/mul walks
+    keep the current frame in registers, then hop a whole record
+  - Walking loops with arithmetic bodies → single-op internal loops
   - Portable 64-bit acceleration for stride-3 scans in generated BF
   - Pointer movement fused into every op (`off` field)
 - **Threaded dispatch**: computed-goto on GCC/Clang, switch elsewhere (`-DBF_USE_CGOTO=0/1`)
