@@ -102,6 +102,37 @@ static bf_cell* bf_word_scan3_backward(bf_cell* p) {
 #define BF_WORD_SCAN3 0
 #endif
 
+// Pure IR inspection, used by the optimizer in every build.
+int bf_looprun_variant(const bf_op* L) {
+    if (L->val == 5 &&
+        L[1].cmd == bfo_VAL_MZ && L[1].val == 1 &&
+        L[2].cmd == bfo_VAL_MUL && L[2].val == 1 &&
+        L[3].cmd == bfo_VAL_MZ && L[3].val == 1 &&
+        L[4].cmd == bfo_VAL)
+        return BF_SEG_LOOPRUN_MZ_MUL_MZ_VAL;
+    if (L->val == 5 &&
+        L[1].cmd == bfo_VAL &&
+        L[2].cmd == bfo_VAL_MUL &&
+        L[3].cmd == bfo_VAL_MZ &&
+        L[4].cmd == bfo_VAL_MZ)
+        return BF_SEG_LOOPRUN_VAL_MUL_MZ_MZ;
+#if BF_AFFINE && BF_AFFINE_APPLY
+    if (L->aux) {
+        const bf_affine* m = bf_affine_get(L->aux);
+        if (m) {
+            switch (m->kind) {
+            case BF_AFF_S1:  return BF_SEG_LOOPRUN_AFF_S1;
+            case BF_AFF_S2Z: return BF_SEG_LOOPRUN_AFF_S2Z;
+            case BF_AFF_S2:  return BF_SEG_LOOPRUN_AFF_S2;
+            case BF_AFF_S3:  return BF_SEG_LOOPRUN_AFF_S3;
+            default: break;
+            }
+        }
+    }
+#endif
+    return BF_SEG_LOOPRUN;
+}
+
 #if !_refInterp
 #if defined(__GNUC__)
 #define BF_NOINLINE __attribute__((noinline))
@@ -275,35 +306,6 @@ static BF_NOINLINE bf_cell* bf_looprun_generic(bf_cell* p, bf_op* P) {
     return bf_exec_fwd(p, P);
 }
 
-int bf_looprun_variant(const bf_op* L) {
-    if (L->val == 5 &&
-        L[1].cmd == bfo_VAL_MZ && L[1].val == 1 &&
-        L[2].cmd == bfo_VAL_MUL && L[2].val == 1 &&
-        L[3].cmd == bfo_VAL_MZ && L[3].val == 1 &&
-        L[4].cmd == bfo_VAL)
-        return BF_SEG_LOOPRUN_MZ_MUL_MZ_VAL;
-    if (L->val == 5 &&
-        L[1].cmd == bfo_VAL &&
-        L[2].cmd == bfo_VAL_MUL &&
-        L[3].cmd == bfo_VAL_MZ &&
-        L[4].cmd == bfo_VAL_MZ)
-        return BF_SEG_LOOPRUN_VAL_MUL_MZ_MZ;
-#if BF_AFFINE && BF_AFFINE_APPLY
-    if (L->aux) {
-        const bf_affine* m = bf_affine_get(L->aux);
-        if (m) {
-            switch (m->kind) {
-            case BF_AFF_S1:  return BF_SEG_LOOPRUN_AFF_S1;
-            case BF_AFF_S2Z: return BF_SEG_LOOPRUN_AFF_S2Z;
-            case BF_AFF_S2:  return BF_SEG_LOOPRUN_AFF_S2;
-            case BF_AFF_S3:  return BF_SEG_LOOPRUN_AFF_S3;
-            default: break;
-            }
-        }
-    }
-#endif
-    return BF_SEG_LOOPRUN;
-}
 
 // Own translation-unit-style clone of PTR_S: the stride scan must not
 // share registers with computed-goto dispatch. Fib/tree spend almost

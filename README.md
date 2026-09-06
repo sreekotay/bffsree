@@ -46,14 +46,24 @@ with a timeout.
   - Scan loops (`[>]`, `[<<]`) → single strided scan op
   - 9-cell tape frames: lane slides to offset 9 and +9 copy/mul walks
     keep the current frame in registers, then hop a whole record
-  - Walking loops with arithmetic bodies → single-op internal loops
+  - Walking loops with arithmetic bodies → single-op internal loops,
+    with the helper variant decided once at optimize time
   - Affine reconstruction: a walking `LOOPRUN` body is composed into
     `new[i] = bias + Σ c[i][j]*old[j]` (mod the cell ring). Small trees
     (1–3 stores) are evaluated as straight-line C picked by shape
     (`s1` / `s2z` / `s2` / `s3`): compile once, bind the window, eval
     each hop. `./bffsree -c` prints the maps. Not an AST walk and not
     a coefficient-loop interpreter. Hop and window come from the IR.
-  - Portable 64-bit acceleration for stride-3 scans in generated BF
+    The map also exposes run-once bodies (no drift, loop cell left at
+    0), which stay inline in the dispatcher instead of a walker.
+  - Nest templates: scan-carrying loops (which `LOOPRUN` cannot take)
+    whose body matches a corpus-dominant structural signature run as
+    one straight-line helper with all parameters in locals — the
+    `LOOPRUN` helpers one level up. `./bffsree -c` prints every loop's
+    signature (`ZVRMV`, `VM{VRS}SmMV`, ...)
+  - Block clears (`[-]>[-]>[-]`) → one `ZFILL`
+  - Portable 64-bit acceleration for stride-3 scans in generated BF;
+    other strides scan four cells per iteration
   - Pointer movement fused into every op (`off` field)
 - **Threaded dispatch**: computed-goto on GCC/Clang, switch elsewhere (`-DBF_USE_CGOTO=0/1`)
 - **Bounds-safe by default**: every access checked; the tape also carries
@@ -96,8 +106,13 @@ make CELL_SIGNED=1      # signed cells
 ### Profiling
 
 `make prof` builds an interpreter that prints a dynamic profile to
-stderr after each run: a histogram of executed IR ops and the hottest
-loop sites with their IR bodies.
+stderr after each run: a histogram of executed IR ops, the hottest
+loop sites with their IR bodies, and the loops still dispatched by
+Eval ranked by direct dispatches (body ops plus back-edges — where
+dispatch time actually goes). `BF_PROF_DUMP=1` adds every op with its
+count for offline analysis; `./bffsree -c` prints each loop's
+structural signature next to its `FWD`, so a hot signature can be
+matched to a nest template.
 
 ```bash
 make prof
@@ -106,6 +121,7 @@ make prof
 # //   MZSCAN         156377434   34.8%
 # //   ...
 # //-- hottest loop sites: ...
+# //-- unconverted loops by direct dispatches (body ops + back-edges): ...
 ```
 
 ### Input
@@ -177,12 +193,53 @@ recursively; copies of copies become `MUL_MUL`.
 
 **Scan loops** — `[>]`, `[<<]` etc. become a single strided `PTR_S`.
 With 8-bit cells, stride `+3` and `-3` scans test three candidates per
-portable 64-bit `memcpy` load using exact zero-byte detection. Wider
-cells retain the scalar implementation.
+portable 64-bit `memcpy` load using exact zero-byte detection. Every
+other stride scans four cells per iteration from four independent
+loads; the scalar loop is bound by one taken branch per cell, and
+mandelbrot scans 488M cells at stride 9 (553 → 480 ms). The scan may
+read up to three strides past the zero it finds, which the sentinel
+pads absorb.
 
 **Walking loops** — loops with net pointer drift can't flatten, but
 one-op bodies run as a single op (`MZSCAN`, `VALSCAN`) and straight-line
-arithmetic bodies run without re-entering dispatch (`LOOPRUN`).
+arithmetic bodies run without re-entering dispatch (`LOOPRUN`). Which
+internal helper a `LOOPRUN` uses (two 4-op copy-walk shapes, the
+affine shape evaluators, or the generic walker) is decoded once into
+the op, so an entry costs a cell test and a switch.
+
+**Run-once loops** — a body with no pointer drift that leaves the loop
+cell at constant 0 is an if-block: `[` skips it when zero, and the `]`
+never jumps back. The affine map identifies these; they stay in the
+dispatcher rather than paying for an internal walker (that was
+`long.b`'s hottest site).
+
+**Nest templates** — loops with no I/O whose body contains scans or
+nested loops cannot be `LOOPRUN`s. When the body's structural signature
+matches a template, the whole body runs as one straight-line C helper
+with every `val`/`off`/`buf` hoisted into locals once per entry; nested
+loops are inlined and every loop-carrying piece tests its cell before
+calling anything. Templates are picked from a corpus-wide ranking of
+loop bodies by direct dispatches (`make prof` with `BF_PROF_DUMP=1`):
+
+| signature | body | where |
+|---|---|---|
+| `ZVRMV` | `VAL_ZERO VAL` · `LOOPRUN` · `VAL_MZ VAL` | mandelbrot, 11 sites |
+| `VM{VRS}SmMV` | `VAL VAL_MZ` · `{VAL LOOPRUN PTR_S}` · `PTR_S MZSCAN` · `VAL_MZ VAL` | mandelbrot, 7 sites |
+
+A *generic* nest runner was built first — the body cut into segments
+(affine block bound to a shape evaluator, scan, block helper, child
+nest) and run by a small switch — and measured slower than leaving the
+loop to the computed-goto dispatcher (mandelbrot 659 → 745 ms).
+Interpreting a map descriptor once per iteration costs more than
+dispatching the two or three trivial ops it replaces; the shape
+evaluators only pay off inside a `LOOPRUN`, where the descriptor loads
+amortize over a tight walk. It stays in the tree behind
+`-DBF_NEST_GENERIC=1` as the measured baseline; by default loops
+without a template are left to the dispatcher.
+
+**Block clears** — `k ≥ 2` adjacent `VAL_ZERO`s storing the same value
+(`[-]>[-]>[-]`) fuse into one `ZFILL`; small fills are straight-line
+stores.
 
 **Offset fusion** — trailing pointer movement folds into each op's
 `off` field, so `++>+>` is two ops, not four.
@@ -200,8 +257,10 @@ arithmetic bodies run without re-entering dispatch (`LOOPRUN`).
 | `VAL_MZ` | Multiply-accumulate, zero the counter |
 | `VAL_MUL` | Multiply-accumulate |
 | `VAL_ZERO` | Set cell to constant |
+| `ZFILL` | Set `k` adjacent cells to a constant |
 | `MZSCAN` / `VALSCAN` | Walking loop with one-op body |
 | `LOOPRUN` | Walking loop with arithmetic body, run internally |
+| `NEST` | Loop whose body matches a template, run as one straight-line helper |
 | `EOP` | End of program |
 
 ## Project Structure
