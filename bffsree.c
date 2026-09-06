@@ -217,6 +217,18 @@ static BF_NOINLINE bf_cell* bf_looprun_generic(bf_cell* p, bf_op* P) {
     }
     return p;
 }
+
+// Own translation-unit-style clone of PTR_S: the stride scan must not
+// share registers with computed-goto dispatch. Fib/tree spend almost
+// all their time here.
+static BF_NOINLINE bf_cell* bf_apply_ptr_s(bf_cell* p, int stride) {
+#if BF_WORD_SCAN3
+    if (stride == 3) return bf_word_scan3_forward(p);
+    if (stride == -3) return bf_word_scan3_backward(p);
+#endif
+    while (*p) p += stride;
+    return p;
+}
 #endif
 
 // =====================================================================
@@ -234,7 +246,11 @@ int bffsree_Eval(bf_VM* vm, char* inp, int ocount) {
 #endif
     int pc = vm->pc;
     int sp = vm->sp;
+#if _refInterp
     int c, icount = ocount;
+#else
+    int icount = ocount;
+#endif
 
     if (ptr == 0) {
         if (ptrLen == 0) ptrLen = bf_MAXCELLS;
@@ -304,20 +320,12 @@ DONE:
                                  ptr[sp] += (bf_cell)(P)->buf; } while (0)
     #define _op_REW(P)      do { if (ptr[sp] != 0) (P) += (P)->val; \
                                  ptr[sp] += (bf_cell)(P)->buf; } while (0)
-#if BF_WORD_SCAN3
-    #define _bf_ptr_scan()  do { if (c == 3) tp = bf_word_scan3_forward(tp); \
-                                 else if (c == -3) tp = bf_word_scan3_backward(tp); \
-                                 else while (*tp) tp += c; } while (0)
-#else
-    #define _bf_ptr_scan()  do { while (*tp) tp += c; } while (0)
-#endif
 #ifdef BF_FAST
     #define _bf_bound_sp()  do { } while (0)
 #else
     #define _bf_bound_sp()  do { if (_mybounds(sp, ptrLen)) goto ERROR_BF; } while (0)
 #endif
-    #define _op_PTR_S(P)    do { c = (P)->val; tp = ptr + sp; \
-                                 _bf_ptr_scan(); \
+    #define _op_PTR_S(P)    do { tp = bf_apply_ptr_s(ptr + sp, (P)->val); \
                                  sp = (int)(tp - ptr); \
                                  _bf_bound_sp(); } while (0)
     #define _op_VAL_MZ(P)   do { ptr[sp + (P)->buf] += (bf_cell)((P)->val * ptr[sp]); \
@@ -450,7 +458,6 @@ DONE:
     #undef _bf_tail
     #undef _bf_tick
     #undef _bf_prof
-    #undef _bf_ptr_scan
     #undef _bf_bound_sp
 
 DONE:
