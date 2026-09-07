@@ -18,17 +18,17 @@ https://esolangs.org/wiki/Brainfuck_speed_test
 ## How fast?
 
 Median seconds over 7 interleaved, output-validated runs, Linux x86-64
-(bffsree/Tritium: Clang 18; bf-cpp: GCC 13):
+(bffsree/bf-cpp: GCC 13; Tritium: Clang 18):
 
 | | BFBench mandelbrot | long | hanoi | factor | golden | fib | binary tree | go2bf mandelbrot | **total** |
 |---|---|---|---|---|---|---|---|---|---|
-| **bffsree** (default) | 0.509 | 0.033 | 0.007 | 0.272 | 0.008 | 2.809 | 1.408 | 4.069 | **9.115** |
-| **bffsree** (`make fast`) | 0.506 | 0.035 | 0.007 | 0.270 | 0.008 | 2.801 | 1.401 | 4.008 | **9.036** |
+| **bffsree** (default) | 0.482 | 0.033 | 0.007 | 0.276 | 0.009 | 2.771 | 1.405 | 4.093 | **9.076** |
+| **bffsree** (`make fast`) | 0.483 | 0.036 | 0.008 | 0.277 | 0.009 | 2.773 | 1.418 | 4.050 | **9.054** |
 | [bf-cpp](https://github.com/jumbub/bf-cpp) | 0.957 | 0.431 | 0.091 | 0.274 | 0.010 | 4.703 | 2.614 | 4.524 | 13.604 |
 | [tritium](https://github.com/rdebath/Brainfuck) `-r` (interpreter) | 1.727 | 0.053 | 0.019 | 0.416 | 0.014 | 7.329 | >30 | >30 | — |
 | tritium JIT (reference, not an interpreter) | 0.359 | 0.006 | 0.012 | 0.064 | 0.007 | 3.837 | 22.319 | >30 | — |
 
-BFBench Mandelbrot went from 0.743 to 0.509 in one pass of profile-
+BFBench Mandelbrot went from 0.743 to 0.482 in one pass of profile-
 driven work with no new dispatch code in Eval: nest templates for its
 two hottest scan-carrying loop bodies, the `LOOPRUN` helper variant
 decoded once instead of per entry, run-once bodies left inline, and a
@@ -38,12 +38,14 @@ run-once rule. The remaining gap to the Tritium JIT is the
 compile-to-native ceiling. `>30` marks a validation timeout; totals are
 omitted for rows with a timeout.
 
-The `Makefile` defaults to `gcc`. Same harness, same box, GCC 13 build
-of bffsree (default / `make fast`): mandelbrot 0.489 / 0.483, long
-0.049 / 0.045, hanoi 0.009 / 0.008, factor 0.308 / 0.292, golden 0.011 /
-0.010, fib 2.941 / 2.926, tree 1.542 / 1.506, go2bf mandelbrot 4.549 /
-4.451, total 9.898 / 9.721. GCC is a hair faster on BFBench mandelbrot
-and 5–10% slower everywhere else; `CC=clang make` if that matters.
+The compiler no longer decides the result. Same harness, same box,
+`CC=clang` (Clang 18, default / `make fast`): mandelbrot 0.514 / 0.508,
+long 0.033 / 0.035, hanoi 0.008 / 0.008, factor 0.273 / 0.284, golden
+0.010 / 0.010, fib 2.742 / 2.735, tree 1.359 / 1.362, go2bf mandelbrot
+4.188 / 4.166, total 9.127 / 9.108 — within 0.6% of GCC overall and
+within 7% on any one workload. Before the layout work (see *Code
+layout* below) the GCC total was 9.898 against Clang's 9.115, with
+`long` 48% and `factor` 13% slower under GCC from identical source.
 
 ## Features
 
@@ -72,7 +74,12 @@ and 5–10% slower everywhere else; `CC=clang make` if that matters.
   - Portable 64-bit acceleration for stride-3 scans in generated BF;
     other strides scan four cells per iteration
   - Pointer movement fused into every op (`off` field)
-- **Threaded dispatch**: computed-goto on GCC/Clang, switch elsewhere (`-DBF_USE_CGOTO=0/1`)
+- **Threaded dispatch**: computed-goto on GCC/Clang, switch elsewhere (`-DBF_USE_CGOTO=0/1`).
+  One indirect jump per opcode is kept under GCC (its crossjumping
+  pass is off for the VM file), and every hot function is 64-byte
+  aligned so an edit elsewhere cannot move the dispatch loop across a
+  fetch window. GCC and Clang builds now land within a few percent of
+  each other on every workload.
 - **Bounds-safe by default**: every access checked; the tape also carries
   permanently-zero sentinel pads so the `fast` build can skip per-op checks
   without leaving the allocation
@@ -200,7 +207,10 @@ recursively; copies of copies become `MUL_MUL`.
 
 **Scan loops** — `[>]`, `[<<]` etc. become a single strided `PTR_S`.
 With 8-bit cells, stride `+3` and `-3` scans test three candidates per
-portable 64-bit `memcpy` load using exact zero-byte detection. Every
+portable 64-bit `memcpy` load using exact zero-byte detection; the
+three lanes are masked and tested with one branch per word, and the
+stopping lane is resolved after the loop (three in-loop tests cost
+GCC ~20% on fib/tree against Clang; one test costs neither). Every
 other stride scans four cells per iteration from four independent
 loads; the scalar loop is bound by one taken branch per cell, and
 mandelbrot scans 488M cells at stride 9 (553 → 480 ms). The scan may
@@ -250,6 +260,19 @@ stores.
 
 **Offset fusion** — trailing pointer movement folds into each op's
 `off` field, so `++>+>` is two ops, not four.
+
+**Code layout** — two things made GCC builds slower than Clang builds
+of the same source, and both were layout, not codegen. GCC's
+crossjumping pass merged the 17 identical dispatch tails of the
+computed-goto loop into 7 shared indirect jumps (one predictor entry
+for many opcodes) and folded the peeled first iteration of the scan
+loops back into the loop; `#pragma GCC optimize("no-crossjumping")`
+on the VM file restores one jump per opcode (`long` 49 → 34 ms,
+`factor` 308 → 276 ms). Separately, with byte-identical `Eval` code,
+a 48-byte shift in its start address moved `factor` by 6%; `Eval` and
+every out-of-line helper are now `aligned(64)` so a function's speed
+depends only on its own code (`-DBF_HOT_ALIGN_BYTES=0` to disable,
+`-DBF_KEEP_CROSSJUMPING` to leave the pass on).
 
 ## IR Opcodes
 
