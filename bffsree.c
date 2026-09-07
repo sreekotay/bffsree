@@ -10,6 +10,39 @@
 #define _refInterp 0
 #endif
 
+// One indirect jump per opcode is the point of threaded dispatch: the
+// predictor keys on the jump address. GCC's crossjumping pass merges
+// the identical dispatch tails back into a handful of shared jumps (7
+// of 17 at -O3) and folds the peeled first iteration of the scan
+// loops back into the loop; long and factor lose 30-45% against the
+// same source under Clang. Turning the pass off for this translation
+// unit costs nothing elsewhere. File scope so every function here
+// shares one option set and inlining decisions are unaffected.
+#if defined(__GNUC__) && !defined(__clang__) && !defined(BF_KEEP_CROSSJUMPING)
+#pragma GCC optimize("no-crossjumping")
+#endif
+
+// Hot functions start on a 64-byte boundary. Without this, the dispatch
+// loop's position relative to fetch / uop-cache windows depended on the
+// size of every function linked before it, and an edit to an unrelated
+// helper moved factor by 6% and long by 15% with byte-identical Eval
+// code. Aligning Eval and each out-of-line helper makes a function's
+// speed a property of its own code again. BF_HOT_ALIGN_BYTES=0 turns it
+// off.
+#ifndef BF_HOT_ALIGN_BYTES
+#define BF_HOT_ALIGN_BYTES 64
+#endif
+#if defined(__GNUC__) && BF_HOT_ALIGN_BYTES > 0
+#define BF_HOT_ALIGN __attribute__((aligned(BF_HOT_ALIGN_BYTES)))
+#else
+#define BF_HOT_ALIGN
+#endif
+#if defined(__GNUC__)
+#define BF_NOINLINE __attribute__((noinline)) BF_HOT_ALIGN
+#else
+#define BF_NOINLINE
+#endif
+
 #if BF_WORD_SCAN && BF_CELL_BITS == 8 && !_refInterp
 #define BF_WORD_SCAN3 1
 
@@ -30,32 +63,39 @@ static uint64_t bf_zero_bytes64(uint64_t x) {
     return ~(((x & low7) + low7) | x | low7) & high;
 }
 
+// One branch per word inside the loop: mask the three lanes the
+// stride visits and test them together, then resolve which lane
+// stopped us after the loop. Three in-loop tests compiled to three
+// taken/not-taken branches per word on GCC and the loop ran ~20%
+// slower than Clang's; with one exit the two compilers agree.
 static bf_cell* bf_word_scan3_forward(bf_cell* p) {
 #if BF_WORD_SCAN_GUARD
     bf_cell* scalar = p;
     while (*scalar) scalar += 3;
 #endif
 
-    if (*p) {
-        for (;;) {
-            uint64_t cells;
-            uint64_t zeros;
-            memcpy(&cells, p, sizeof(cells));
-            zeros = bf_zero_bytes64(cells);
+    for (;;) {
+        uint64_t cells;
+        uint64_t zeros;
+        memcpy(&cells, p, sizeof(cells));
+        zeros = bf_zero_bytes64(cells);
 #if defined(BF_WORD_BYTE0)
-            if (zeros & BF_WORD_BYTE0) break;
-            if (zeros & BF_WORD_BYTE3) { p += 3; break; }
-            if (zeros & BF_WORD_BYTE6) { p += 6; break; }
-#else
-            {
-                const unsigned char* z = (const unsigned char*)&zeros;
-                if (z[0]) break;
-                if (z[3]) { p += 3; break; }
-                if (z[6]) { p += 6; break; }
-            }
-#endif
-            p += 9;
+        zeros &= BF_WORD_BYTE0 | BF_WORD_BYTE3 | BF_WORD_BYTE6;
+        if (zeros) {
+            if (!(zeros & BF_WORD_BYTE0))
+                p += (zeros & BF_WORD_BYTE3) ? 3 : 6;
+            break;
         }
+#else
+        {
+            const unsigned char* z = (const unsigned char*)&zeros;
+            if (z[0] | z[3] | z[6]) {
+                if (!z[0]) p += z[3] ? 3 : 6;
+                break;
+            }
+        }
+#endif
+        p += 9;
     }
 
 #if BF_WORD_SCAN_GUARD
@@ -70,27 +110,29 @@ static bf_cell* bf_word_scan3_backward(bf_cell* p) {
     while (*scalar) scalar -= 3;
 #endif
 
-    if (*p) {
-        for (;;) {
-            bf_cell* base = p - 6;
-            uint64_t cells;
-            uint64_t zeros;
-            memcpy(&cells, base, sizeof(cells));
-            zeros = bf_zero_bytes64(cells);
+    for (;;) {
+        bf_cell* base = p - 6;
+        uint64_t cells;
+        uint64_t zeros;
+        memcpy(&cells, base, sizeof(cells));
+        zeros = bf_zero_bytes64(cells);
 #if defined(BF_WORD_BYTE0)
-            if (zeros & BF_WORD_BYTE6) break;
-            if (zeros & BF_WORD_BYTE3) { p -= 3; break; }
-            if (zeros & BF_WORD_BYTE0) { p -= 6; break; }
-#else
-            {
-                const unsigned char* z = (const unsigned char*)&zeros;
-                if (z[6]) break;
-                if (z[3]) { p -= 3; break; }
-                if (z[0]) { p -= 6; break; }
-            }
-#endif
-            p -= 9;
+        zeros &= BF_WORD_BYTE0 | BF_WORD_BYTE3 | BF_WORD_BYTE6;
+        if (zeros) {
+            if (!(zeros & BF_WORD_BYTE6))
+                p -= (zeros & BF_WORD_BYTE3) ? 3 : 6;
+            break;
         }
+#else
+        {
+            const unsigned char* z = (const unsigned char*)&zeros;
+            if (z[0] | z[3] | z[6]) {
+                if (!z[6]) p -= z[3] ? 3 : 6;
+                break;
+            }
+        }
+#endif
+        p -= 9;
     }
 
 #if BF_WORD_SCAN_GUARD
@@ -134,12 +176,6 @@ int bf_looprun_variant(const bf_op* L) {
 }
 
 #if !_refInterp
-#if defined(__GNUC__)
-#define BF_NOINLINE __attribute__((noinline))
-#else
-#define BF_NOINLINE
-#endif
-
 #if BF_PROFILE
 static unsigned long long* bf_prof_counts;
 static bf_op* bf_prof_base;
@@ -287,7 +323,7 @@ static BF_NOINLINE bf_cell* bf_looprun_mz_mul_mz_val(
 
 static bf_cell* bf_exec_ops(bf_cell* p, bf_op* b, bf_op* end);
 
-static bf_cell* bf_exec_fwd(bf_cell* p, bf_op* P) {
+static BF_HOT_ALIGN bf_cell* bf_exec_fwd(bf_cell* p, bf_op* P) {
     if (*p) {
         *p += (bf_cell)P->buf;
         p += P->off;
@@ -843,7 +879,7 @@ static BF_NOINLINE bf_cell* bf_nest_run(bf_cell* p, bf_op* L) {
 
 // Interpret a walkable IR range. Nested FWD/LOOPRUN/scans are executed
 // here so Eval only dispatches the outer LOOPRUN.
-static bf_cell* bf_exec_ops(bf_cell* p, bf_op* b, bf_op* end) {
+static BF_HOT_ALIGN bf_cell* bf_exec_ops(bf_cell* p, bf_op* b, bf_op* end) {
     while (b < end) {
         bf_prof_hit(b);
         switch (b->cmd) {
@@ -922,7 +958,7 @@ static bf_cell* bf_exec_ops(bf_cell* p, bf_op* b, bf_op* end) {
 // =====================================================================
 // main VM loop for bfi
 // =====================================================================
-int bffsree_Eval(bf_VM* vm, char* inp, int ocount) {
+BF_HOT_ALIGN int bffsree_Eval(bf_VM* vm, char* inp, int ocount) {
     bf_cell* ptr = vm->tape;
     int ptrLen = vm->tapeLen;
 #if _refInterp
