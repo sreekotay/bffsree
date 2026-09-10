@@ -511,7 +511,11 @@ static inline void bf_zfill(bf_cell* p, int k, bf_cell v) {
         + (uint64_t)(p)[(b).soff[1]] * (b).cvec[1] \
         + (uint64_t)(p)[(b).soff[2]] * (b).cvec[2] \
         + (uint64_t)(p)[(b).soff[3]] * (b).cvec[3]; } while (0)
-#define BF_AFF_LANE(acc, s) ((bf_cell)((acc) >> (BF_AFF_LANE_BITS * (s))))
+// Lane s of the accumulator. The guard keeps the shift in range for
+// wide cells, where bf_affine_pack never produces that many lanes but
+// the walker for them is still compiled.
+#define BF_AFF_LANE(acc, s) \
+    ((bf_cell)(BF_AFF_LANE_BITS * (s) < 64 ? (acc) >> (BF_AFF_LANE_BITS * (s) % 64) : 0))
 
 static BF_NOINLINE bf_cell* bf_aff_walk_s1(
     bf_cell* restrict p, bf_cell fbuf, int foff, const bf_aff_bound* restrict b)
