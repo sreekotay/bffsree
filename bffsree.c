@@ -345,19 +345,23 @@ static BF_NOINLINE bf_cell* bf_looprun_generic(bf_cell* p, bf_op* P) {
 }
 
 
-// Own translation-unit-style clone of PTR_S: the stride scan must not
-// share registers with computed-goto dispatch. Fib/tree spend almost
-// all their time here.
 // Stride scan, four cells per iteration. The four loads are
 // independent, so the not-taken tests overlap; the scalar loop is
 // bound by one taken branch per cell. Reads up to three strides past
 // the first zero: strides are under 128 cells and the sentinel pads
 // are BF_TAPE_PAD, so that stays inside the allocation. Eight-way and
 // a branchless zero-mask combine were both measured slower.
+//
+// Two entry points. Eval calls the out-of-line bf_apply_ptr_s so the
+// scan never shares registers with computed-goto dispatch (fib/tree
+// spend almost all their time here). Nest templates, whose bodies are
+// plain loops with the parameters in locals, inline bf_scan_stride:
+// on mandelbrot they make 22M scans of ~20 cells, and the call plus
+// prologue was a sixth of each.
 #ifndef BF_SCAN_UNROLL
 #define BF_SCAN_UNROLL 1
 #endif
-static BF_NOINLINE bf_cell* bf_apply_ptr_s(bf_cell* p, int stride) {
+static BF_ALWAYS_INLINE bf_cell* bf_scan_stride(bf_cell* p, int stride) {
 #if BF_WORD_SCAN3
     if (stride == 3) return bf_word_scan3_forward(p);
     if (stride == -3) return bf_word_scan3_backward(p);
@@ -382,6 +386,10 @@ static BF_NOINLINE bf_cell* bf_apply_ptr_s(bf_cell* p, int stride) {
     while (*p) p += stride;
     return p;
 #endif
+}
+
+static BF_NOINLINE bf_cell* bf_apply_ptr_s(bf_cell* p, int stride) {
+    return bf_scan_stride(p, stride);
 }
 
 #if !BF_PROFILE
@@ -817,7 +825,7 @@ static BF_NOINLINE bf_cell* bf_nest_t_vm_vrs_s_m_mv(bf_cell* p, bf_op* L) {
                 if (*p) p = bf_looprun_taken(p, R, rsub);
                 *p += rbuf;
                 p += roff;
-                if (*p) p = bf_apply_ptr_s(p, s1);
+                if (*p) p = bf_scan_stride(p, s1);
                 p += s1off;
                 if (*p == 0) break;
                 *p += Fbuf;
@@ -826,7 +834,7 @@ static BF_NOINLINE bf_cell* bf_nest_t_vm_vrs_s_m_mv(bf_cell* p, bf_op* L) {
         }
         *p += FRbuf;
         p += FRoff;
-        if (*p) p = bf_apply_ptr_s(p, s2);
+        if (*p) p = bf_scan_stride(p, s2);
         p += s2off;
         p = bf_run_mzscan(p, Z);
         p[m2buf] += (bf_cell)(m2val * *p);
@@ -864,7 +872,7 @@ static BF_ALWAYS_INLINE bf_cell* bf_nest_t_sv_f_sv_body(bf_cell* p, bf_op* L, in
     *p += fbuf;
     p += foff;
     for (;;) {
-        if (*p) p = bf_apply_ptr_s(p, s1);
+        if (*p) p = bf_scan_stride(p, s1);
         p += s1off;
         *p += v1;
         p += v1off;
@@ -872,7 +880,7 @@ static BF_ALWAYS_INLINE bf_cell* bf_nest_t_sv_f_sv_body(bf_cell* p, bf_op* L, in
             bf_zfill(p, fk, fv);
             p += Foff;
         }
-        if (*p) p = bf_apply_ptr_s(p, s2);
+        if (*p) p = bf_scan_stride(p, s2);
         p += s2off;
         *p += v2;
         p += v2off;
