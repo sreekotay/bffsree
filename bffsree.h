@@ -279,6 +279,19 @@ int bf_looprun_variant(const bf_op *L);
 #if BF_AFFINE
 // Sparse affine map for one LOOPRUN body, relative to the pointer at
 // the start of the body (after the LOOPRUN header's buf/off).
+// Lane-packed form of a small map (kind != NONE), built once at
+// classify time by bf_affine_pack. Every store of the map is one lane
+// of a 64-bit word: acc = bias + old0*cvec[0] + ... + old3*cvec[3]
+// evaluates all of them with four multiply-adds, and store s takes
+// the low cell bits of lane s. Unused sources read p[0] with cvec 0.
+typedef struct bf_aff_bound {
+    int16_t  hop;
+    int16_t  soff[4];
+    int16_t  dst[4];
+    uint64_t cvec[4];
+    uint64_t bias;
+} bf_aff_bound;
+
 typedef struct bf_affine {
     int16_t hop;
     int16_t src_off[BF_AFFINE_MAX_SRC];
@@ -293,12 +306,14 @@ typedef struct bf_affine {
         uint8_t src;
         bf_cell k;
     } term[BF_AFFINE_MAX_TERM];
+    bf_aff_bound bound;
 } bf_affine;
 
 const bf_affine *bf_affine_get(unsigned id);
 int              bf_affine_count(void);
 int              bf_affine_from_body(const bf_op *body, int n, bf_affine *out);
 int              bf_affine_classify(bf_affine *m);
+int              bf_affine_pack(bf_affine *m);
 int              bf_affine_format(const bf_affine *m, char *buf, int buflen);
 const char      *bf_affine_kind_name(int kind);
 #endif

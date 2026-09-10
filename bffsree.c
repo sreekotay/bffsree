@@ -438,66 +438,32 @@ static inline void bf_zfill(bf_cell* p, int k, bf_cell v) {
 
 #if !BF_PROFILE
 #if BF_AFFINE && BF_AFFINE_APPLY
-// Straight-line eval of a compiled affine tree. Snapshot the bound
-// window, write dests from old[], hop. Shape is picked once per
-// LOOPRUN entry (kind), not per hop and not by program name.
-static inline void bf_aff_load4(const bf_cell* p, const bf_affine* m, bf_cell old[4])
-{
-    old[0] = old[1] = old[2] = old[3] = 0;
-    if (m->nsrc > 0) old[0] = p[m->src_off[0]];
-    if (m->nsrc > 1) old[1] = p[m->src_off[1]];
-    if (m->nsrc > 2) old[2] = p[m->src_off[2]];
-    if (m->nsrc > 3) old[3] = p[m->src_off[3]];
-}
-
-static inline bf_cell bf_aff_acc(const bf_affine* m, int s, const bf_cell old[4])
-{
-    bf_cell v = m->store[s].bias;
-    unsigned t0 = m->store[s].t0, nt = m->store[s].nt;
-    if (nt > 0) v = (bf_cell)(v + m->term[t0].k * old[m->term[t0].src]);
-    if (nt > 1) v = (bf_cell)(v + m->term[t0 + 1].k * old[m->term[t0 + 1].src]);
-    if (nt > 2) v = (bf_cell)(v + m->term[t0 + 2].k * old[m->term[t0 + 2].src]);
-    return v;
-}
+// Lane evaluator. The map's stores are lanes of one 64-bit word (see
+// bf_affine_pack); a hop is four cell loads, four multiply-adds, and
+// one byte extract per store. Nothing in the descriptor is read
+// inside the loop, so tape stores (bf_cell is a character type and
+// aliases everything) force no reloads. Three walkers by store count.
+#define BF_AFF_LANE_BITS (2 * BF_CELL_BITS)
+#define BF_AFF_HOP(b, p, acc) do { \
+    acc = (b).bias \
+        + (uint64_t)(p)[(b).soff[0]] * (b).cvec[0] \
+        + (uint64_t)(p)[(b).soff[1]] * (b).cvec[1] \
+        + (uint64_t)(p)[(b).soff[2]] * (b).cvec[2] \
+        + (uint64_t)(p)[(b).soff[3]] * (b).cvec[3]; } while (0)
+#define BF_AFF_LANE(acc, s) ((bf_cell)((acc) >> (BF_AFF_LANE_BITS * (s))))
 
 static BF_NOINLINE bf_cell* bf_aff_walk_s1(
-    bf_cell* p, bf_cell fbuf, int foff, const bf_affine* m)
+    bf_cell* restrict p, bf_cell fbuf, int foff, const bf_aff_bound* restrict b)
 {
+    const int d0 = b->dst[0], hop = b->hop;
     if (*p) {
         *p += fbuf;
         p += foff;
         for (;;) {
-            bf_cell old[4];
-            bf_aff_load4(p, m, old);
-            p[m->store[0].dst] = bf_aff_acc(m, 0, old);
-            p += m->hop;
-            if (*p == 0) break;
-            *p += fbuf;
-            p += foff;
-        }
-    }
-    return p;
-}
-
-static BF_NOINLINE bf_cell* bf_aff_walk_s2z(
-    bf_cell* p, bf_cell fbuf, int foff, const bf_affine* m)
-{
-    int z = (m->store[0].nt == 0) ? 0 : 1;
-    int a = 1 - z;
-    if (*p) {
-        *p += fbuf;
-        p += foff;
-        for (;;) {
-            bf_cell old[4], v;
-            unsigned t0 = m->store[a].t0, nt = m->store[a].nt;
-            bf_aff_load4(p, m, old);
-            p[m->store[z].dst] = m->store[z].bias;
-            v = m->store[a].bias;
-            v = (bf_cell)(v + m->term[t0].k * old[m->term[t0].src]);
-            if (nt > 1)
-                v = (bf_cell)(v + m->term[t0 + 1].k * old[m->term[t0 + 1].src]);
-            p[m->store[a].dst] = v;
-            p += m->hop;
+            uint64_t acc;
+            BF_AFF_HOP(*b, p, acc);
+            p[d0] = BF_AFF_LANE(acc, 0);
+            p += hop;
             if (*p == 0) break;
             *p += fbuf;
             p += foff;
@@ -507,19 +473,18 @@ static BF_NOINLINE bf_cell* bf_aff_walk_s2z(
 }
 
 static BF_NOINLINE bf_cell* bf_aff_walk_s2(
-    bf_cell* p, bf_cell fbuf, int foff, const bf_affine* m)
+    bf_cell* restrict p, bf_cell fbuf, int foff, const bf_aff_bound* restrict b)
 {
+    const int d0 = b->dst[0], d1 = b->dst[1], hop = b->hop;
     if (*p) {
         *p += fbuf;
         p += foff;
         for (;;) {
-            bf_cell old[4], n0, n1;
-            bf_aff_load4(p, m, old);
-            n0 = bf_aff_acc(m, 0, old);
-            n1 = bf_aff_acc(m, 1, old);
-            p[m->store[0].dst] = n0;
-            p[m->store[1].dst] = n1;
-            p += m->hop;
+            uint64_t acc;
+            BF_AFF_HOP(*b, p, acc);
+            p[d0] = BF_AFF_LANE(acc, 0);
+            p[d1] = BF_AFF_LANE(acc, 1);
+            p += hop;
             if (*p == 0) break;
             *p += fbuf;
             p += foff;
@@ -529,21 +494,19 @@ static BF_NOINLINE bf_cell* bf_aff_walk_s2(
 }
 
 static BF_NOINLINE bf_cell* bf_aff_walk_s3(
-    bf_cell* p, bf_cell fbuf, int foff, const bf_affine* m)
+    bf_cell* restrict p, bf_cell fbuf, int foff, const bf_aff_bound* restrict b)
 {
+    const int d0 = b->dst[0], d1 = b->dst[1], d2 = b->dst[2], hop = b->hop;
     if (*p) {
         *p += fbuf;
         p += foff;
         for (;;) {
-            bf_cell old[4], n0, n1, n2;
-            bf_aff_load4(p, m, old);
-            n0 = bf_aff_acc(m, 0, old);
-            n1 = bf_aff_acc(m, 1, old);
-            n2 = bf_aff_acc(m, 2, old);
-            p[m->store[0].dst] = n0;
-            p[m->store[1].dst] = n1;
-            p[m->store[2].dst] = n2;
-            p += m->hop;
+            uint64_t acc;
+            BF_AFF_HOP(*b, p, acc);
+            p[d0] = BF_AFF_LANE(acc, 0);
+            p[d1] = BF_AFF_LANE(acc, 1);
+            p[d2] = BF_AFF_LANE(acc, 2);
+            p += hop;
             if (*p == 0) break;
             *p += fbuf;
             p += foff;
@@ -571,13 +534,12 @@ static inline bf_cell* bf_looprun_taken(bf_cell* p, bf_op* L, int variant) {
             L[4].val, L[4].buf, L[4].off);
 #if BF_AFFINE && BF_AFFINE_APPLY
     case BF_SEG_LOOPRUN_AFF_S1:
-        return bf_aff_walk_s1(p, (bf_cell)L->buf, L->off, bf_affine_get(L->aux));
+        return bf_aff_walk_s1(p, (bf_cell)L->buf, L->off, &bf_affine_get(L->aux)->bound);
     case BF_SEG_LOOPRUN_AFF_S2Z:
-        return bf_aff_walk_s2z(p, (bf_cell)L->buf, L->off, bf_affine_get(L->aux));
     case BF_SEG_LOOPRUN_AFF_S2:
-        return bf_aff_walk_s2(p, (bf_cell)L->buf, L->off, bf_affine_get(L->aux));
+        return bf_aff_walk_s2(p, (bf_cell)L->buf, L->off, &bf_affine_get(L->aux)->bound);
     case BF_SEG_LOOPRUN_AFF_S3:
-        return bf_aff_walk_s3(p, (bf_cell)L->buf, L->off, bf_affine_get(L->aux));
+        return bf_aff_walk_s3(p, (bf_cell)L->buf, L->off, &bf_affine_get(L->aux)->bound);
 #endif
     default:
         return bf_looprun_generic(p, L);
@@ -658,44 +620,24 @@ static BF_NOINLINE bf_cell* bf_nest_run(bf_cell* p, bf_op* L);
 #if BF_AFFINE && BF_AFFINE_APPLY
 // One application of a compiled affine tree, by kind.
 static inline bf_cell* bf_aff_apply(bf_cell* p, const bf_affine* m) {
-    bf_cell old[4];
-    bf_aff_load4(p, m, old);
+    const bf_aff_bound* b = &m->bound;
+    uint64_t acc;
+    BF_AFF_HOP(*b, p, acc);
     switch (m->kind) {
+    case BF_AFF_S3:
+        p[b->dst[2]] = BF_AFF_LANE(acc, 2);
+        /* fall through */
+    case BF_AFF_S2Z:
+    case BF_AFF_S2:
+        p[b->dst[1]] = BF_AFF_LANE(acc, 1);
+        /* fall through */
     case BF_AFF_S1:
-        p[m->store[0].dst] = bf_aff_acc(m, 0, old);
+        p[b->dst[0]] = BF_AFF_LANE(acc, 0);
         break;
-    case BF_AFF_S2Z: {
-        int z = (m->store[0].nt == 0) ? 0 : 1;
-        int a = 1 - z;
-        unsigned t0 = m->store[a].t0, nt = m->store[a].nt;
-        bf_cell v = m->store[a].bias;
-        v = (bf_cell)(v + m->term[t0].k * old[m->term[t0].src]);
-        if (nt > 1)
-            v = (bf_cell)(v + m->term[t0 + 1].k * old[m->term[t0 + 1].src]);
-        p[m->store[z].dst] = m->store[z].bias;
-        p[m->store[a].dst] = v;
-        break;
-    }
-    case BF_AFF_S2: {
-        bf_cell n0 = bf_aff_acc(m, 0, old);
-        bf_cell n1 = bf_aff_acc(m, 1, old);
-        p[m->store[0].dst] = n0;
-        p[m->store[1].dst] = n1;
-        break;
-    }
-    case BF_AFF_S3: {
-        bf_cell n0 = bf_aff_acc(m, 0, old);
-        bf_cell n1 = bf_aff_acc(m, 1, old);
-        bf_cell n2 = bf_aff_acc(m, 2, old);
-        p[m->store[0].dst] = n0;
-        p[m->store[1].dst] = n1;
-        p[m->store[2].dst] = n2;
-        break;
-    }
     default:
         break;
     }
-    return p + m->hop;
+    return p + b->hop;
 }
 #endif
 

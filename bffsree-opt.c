@@ -549,7 +549,48 @@ int bf_affine_classify(bf_affine *m) {
         m->kind = BF_AFF_S2;
     else if (m->nstore == 3)
         m->kind = BF_AFF_S3;
+    if (m->kind != BF_AFF_NONE && !bf_affine_pack(m))
+        m->kind = BF_AFF_NONE;
     return (int)m->kind;
+}
+
+// Pack the map for the lane evaluator. Store s lives in lane s of a
+// 64-bit word; lane width is twice the cell width so a lane can hold
+// half + bias + sum(c * old) without touching its neighbours, where c
+// is the signed representative of each ring coefficient. One 64-bit
+// multiply-add per source then evaluates every store at once; the
+// cell value is the low cell-width bits of the lane (half is a
+// multiple of the ring). Maps whose coefficients could overflow a
+// lane are refused and stay on the generic walker.
+int bf_affine_pack(bf_affine *m) {
+    bf_aff_bound *b = &m->bound;
+    const int lane = 2 * BF_CELL_BITS;
+    const int nlanes = (lane > 64) ? 0 : 64 / lane;
+    const uint64_t half = (lane > 64) ? 0 : (UINT64_C(1) << (lane - 1));
+    const uint64_t cmax = (UINT64_C(1) << BF_CELL_BITS) - 1;
+    int s, t, i;
+
+    memset(b, 0, sizeof(*b));
+    if (nlanes == 0 || m->nstore > nlanes || m->nsrc > 4) return 0;
+    b->hop = m->hop;
+    for (i = 0; i < m->nsrc; i++) b->soff[i] = m->src_off[i];
+    for (s = 0; s < m->nstore; s++) {
+        int64_t c[4] = {0, 0, 0, 0};
+        uint64_t mag = 0;
+        b->dst[s] = m->store[s].dst;
+        for (t = 0; t < m->store[s].nt; t++) {
+            int src = m->term[m->store[s].t0 + t].src;
+            uint64_t k = m->term[m->store[s].t0 + t].k;
+            c[src] += (k > cmax / 2) ? (int64_t)k - (int64_t)cmax - 1 : (int64_t)k;
+        }
+        for (i = 0; i < 4; i++) {
+            mag += (uint64_t)(c[i] < 0 ? -c[i] : c[i]);
+            b->cvec[i] += (uint64_t)c[i] << (lane * s);
+        }
+        if (mag > (half - 1 - (uint64_t)m->store[s].bias) / cmax) return 0;
+        b->bias += (half + (uint64_t)m->store[s].bias) << (lane * s);
+    }
+    return 1;
 }
 
 const char *bf_affine_kind_name(int kind) {
