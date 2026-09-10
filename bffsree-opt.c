@@ -829,6 +829,8 @@ static int bf_nest_compile(bf_op *bfo, int s, bf_nest *n) {
 static const struct { const char *sig; int tmpl; } bf_templates[] = {
     { "ZVRMV",       BF_TMPL_ZV_R_MV },
     { "VM{VRS}SmMV", BF_TMPL_VM_VRS_S_m_MV },
+    { "SVFSV",       BF_TMPL_S_V_F_S_V },
+    { "SVSV",        BF_TMPL_S_V_S_V },
 };
 
 static int bf_nest_template(const bf_op *bfo, int s) {

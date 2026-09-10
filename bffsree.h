@@ -257,7 +257,9 @@ typedef struct bf_seg {
 enum {
     BF_TMPL_NONE = 0,
     BF_TMPL_ZV_R_MV,        /* "ZVRMV"        */
-    BF_TMPL_VM_VRS_S_m_MV   /* "VM{VRS}SmMV"  */
+    BF_TMPL_VM_VRS_S_m_MV,  /* "VM{VRS}SmMV"  */
+    BF_TMPL_S_V_F_S_V,      /* "SVFSV"        */
+    BF_TMPL_S_V_S_V         /* "SVSV"         */
 };
 
 int bf_nest_signature(const bf_op *bfo, int s, char *buf, int buflen);

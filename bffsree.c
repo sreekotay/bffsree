@@ -841,6 +841,56 @@ static BF_NOINLINE bf_cell* bf_nest_t_vm_vrs_s_m_mv(bf_cell* p, bf_op* L) {
     return p;
 }
 
+// Templates "SVFSV" / "SVSV": PTR_S VAL [ZFILL] PTR_S VAL — a flat
+// loop that scans out along a record array, marks or clears at the
+// end, scans back and counts down. No inner loop, so LOOPRUN cannot
+// take it, and Eval dispatched each of its 4-5 ops per iteration.
+// One body; the fill is a compile-time constant in each wrapper.
+static BF_ALWAYS_INLINE bf_cell* bf_nest_t_sv_f_sv_body(bf_cell* p, bf_op* L, int fill) {
+    bf_op* S1 = L + 1;
+    bf_op* V1 = L + 2;
+    bf_op* F  = L + 3;
+    bf_op* S2 = L + 3 + fill;
+    bf_op* V2 = S2 + 1;
+    const bf_cell fbuf = (bf_cell)L->buf;  const int foff  = L->off;
+    const int     s1   = S1->val;          const int s1off = S1->off;
+    const bf_cell v1   = (bf_cell)V1->val; const int v1off = V1->off;
+    const int     fk   = fill ? F->buf : 0;
+    const bf_cell fv   = fill ? (bf_cell)F->val : 0;
+    const int     Foff = fill ? F->off : 0;
+    const int     s2   = S2->val;          const int s2off = S2->off;
+    const bf_cell v2   = (bf_cell)V2->val; const int v2off = V2->off;
+
+    *p += fbuf;
+    p += foff;
+    for (;;) {
+        if (*p) p = bf_apply_ptr_s(p, s1);
+        p += s1off;
+        *p += v1;
+        p += v1off;
+        if (fill) {
+            bf_zfill(p, fk, fv);
+            p += Foff;
+        }
+        if (*p) p = bf_apply_ptr_s(p, s2);
+        p += s2off;
+        *p += v2;
+        p += v2off;
+        if (*p == 0) break;
+        *p += fbuf;
+        p += foff;
+    }
+    return p;
+}
+
+static BF_NOINLINE bf_cell* bf_nest_t_sv_f_sv(bf_cell* p, bf_op* L) {
+    return bf_nest_t_sv_f_sv_body(p, L, 1);
+}
+
+static BF_NOINLINE bf_cell* bf_nest_t_sv_sv(bf_cell* p, bf_op* L) {
+    return bf_nest_t_sv_f_sv_body(p, L, 0);
+}
+
 // *p != 0 on entry. Stops at the failed loop test (REW not applied).
 static BF_NOINLINE bf_cell* bf_nest_run(bf_cell* p, bf_op* L) {
     const bf_nest* n = bf_nest_get(L->aux);
@@ -848,6 +898,8 @@ static BF_NOINLINE bf_cell* bf_nest_run(bf_cell* p, bf_op* L) {
     switch (n->tmpl) {
     case BF_TMPL_ZV_R_MV:       return bf_nest_t_zv_r_mv(p, L);
     case BF_TMPL_VM_VRS_S_m_MV: return bf_nest_t_vm_vrs_s_m_mv(p, L);
+    case BF_TMPL_S_V_F_S_V:     return bf_nest_t_sv_f_sv(p, L);
+    case BF_TMPL_S_V_S_V:       return bf_nest_t_sv_sv(p, L);
     default: break;
     }
     *p += (bf_cell)L->buf;
