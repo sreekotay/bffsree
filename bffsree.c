@@ -361,14 +361,21 @@ static BF_NOINLINE bf_cell* bf_apply_ptr_s(bf_cell* p, int stride) {
     if (stride == -3) return bf_word_scan3_backward(p);
 #endif
 #if BF_SCAN_UNROLL
+    // One induction variable: the exits record an offset and fall out
+    // through a single return. Written as four `return p + k*stride`
+    // exits, GCC keeps four pointers live across the loop (one add
+    // each per iteration) and spills two callee-saved registers.
+    const intptr_t s = stride, s2 = 2 * s, s3 = 3 * s, s4 = 4 * s;
+    intptr_t k;
     for (;;) {
-        bf_cell a = p[0], b = p[stride], c = p[2 * stride], d = p[3 * stride];
-        if (a == 0) return p;
-        if (b == 0) return p + stride;
-        if (c == 0) return p + 2 * stride;
-        if (d == 0) return p + 3 * stride;
-        p += 4 * stride;
+        bf_cell a = p[0], b = p[s], c = p[s2], d = p[s3];
+        if (a == 0) { k = 0; break; }
+        if (b == 0) { k = s; break; }
+        if (c == 0) { k = s2; break; }
+        if (d == 0) { k = s3; break; }
+        p += s4;
     }
+    return p + k;
 #else
     while (*p) p += stride;
     return p;
