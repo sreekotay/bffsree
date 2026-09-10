@@ -22,8 +22,8 @@ Median seconds over 7 interleaved, output-validated runs, Linux x86-64
 
 | | BFBench mandelbrot | long | hanoi | factor | golden | fib | binary tree | go2bf mandelbrot | **total** |
 |---|---|---|---|---|---|---|---|---|---|
-| **bffsree** (default) | 0.482 | 0.033 | 0.007 | 0.276 | 0.009 | 2.771 | 1.405 | 4.093 | **9.076** |
-| **bffsree** (`make fast`) | 0.483 | 0.036 | 0.008 | 0.277 | 0.009 | 2.773 | 1.418 | 4.050 | **9.054** |
+| **bffsree** (default) | 0.397 | 0.032 | 0.007 | 0.263 | 0.009 | 2.789 | 1.409 | 3.928 | **8.834** |
+| **bffsree** (`make fast`) | 0.393 | 0.030 | 0.007 | 0.254 | 0.009 | 2.767 | 1.392 | 3.854 | **8.706** |
 | [bf-cpp](https://github.com/jumbub/bf-cpp) | 0.957 | 0.431 | 0.091 | 0.274 | 0.010 | 4.703 | 2.614 | 4.524 | 13.604 |
 | [tritium](https://github.com/rdebath/Brainfuck) `-r` (interpreter) | 1.727 | 0.053 | 0.019 | 0.416 | 0.014 | 7.329 | >30 | >30 | — |
 | tritium JIT (reference, not an interpreter) | 0.359 | 0.006 | 0.012 | 0.064 | 0.007 | 3.837 | 22.319 | >30 | — |
@@ -34,18 +34,32 @@ two hottest scan-carrying loop bodies, the `LOOPRUN` helper variant
 decoded once instead of per entry, run-once bodies left inline, and a
 four-way stride scan (mandelbrot scans 488M cells at stride 9). Fib and
 tree gained from the same `LOOPRUN` and scan changes; `long` from the
-run-once rule. The remaining gap to the Tritium JIT is the
-compile-to-native ceiling. `>30` marks a validation timeout; totals are
-omitted for rows with a timeout.
+run-once rule.
 
-The compiler no longer decides the result. Same harness, same box,
-`CC=clang` (Clang 18, default / `make fast`): mandelbrot 0.514 / 0.508,
-long 0.033 / 0.035, hanoi 0.008 / 0.008, factor 0.273 / 0.284, golden
-0.010 / 0.010, fib 2.742 / 2.735, tree 1.359 / 1.362, go2bf mandelbrot
-4.188 / 4.166, total 9.127 / 9.108 — within 0.6% of GCC overall and
-within 7% on any one workload. Before the layout work (see *Code
-layout* below) the GCC total was 9.898 against Clang's 9.115, with
-`long` 48% and `factor` 13% slower under GCC from identical source.
+A second pass on the GCC build, measured in instructions (callgrind)
+so that host noise could not vote, took mandelbrot from 0.482 to
+0.397 with 24% fewer instructions (8.32G → 6.32G): a lane-packed
+affine evaluator, a stride scan GCC compiles to one induction
+variable, templates for the flat scan loops that were 30M of Eval's
+81M dispatches, the innermost `LOOPRUN` walk inlined into its
+template, two frames per trip in the lane slides, helper variants
+pre-decoded for `MZSCAN`, and each opcode handler on its own cache
+line. The remaining gap to the Tritium JIT is the compile-to-native
+ceiling. `>30` marks a validation timeout; totals are omitted for rows
+with a timeout.
+
+The compiler does not decide the result. Same harness, same box,
+`CC=clang` (Clang 18, default / `make fast`): mandelbrot 0.460 / 0.452,
+long 0.033 / 0.035, hanoi 0.008 / 0.008, factor 0.261 / 0.269, golden
+0.010 / 0.010, fib 2.735 / 2.711, tree 1.343 / 1.334, go2bf mandelbrot
+4.129 / 4.071, total 8.979 / 8.890 — within 1.6% of GCC overall and
+identical on `long` and `factor`. Clang trails on BFBench mandelbrot
+(16%) with the same instruction count: the two fixes that opened
+that gap were GCC-only — Clang already compiled the stride scan to
+one induction variable, and its computed-goto targets cannot be
+line-aligned from source. Before the layout work (see *Code layout*
+below) the GCC total was 9.898 against Clang's 9.115, with `long` 48%
+and `factor` 13% slower under GCC from identical source.
 
 ## Features
 
@@ -59,17 +73,19 @@ layout* below) the GCC total was 9.898 against Clang's 9.115, with
     with the helper variant decided once at optimize time
   - Affine reconstruction: a walking `LOOPRUN` body is composed into
     `new[i] = bias + Σ c[i][j]*old[j]` (mod the cell ring). Small trees
-    (1–3 stores) are evaluated as straight-line C picked by shape
-    (`s1` / `s2z` / `s2` / `s3`): compile once, bind the window, eval
-    each hop. `./bffsree -c` prints the maps. Not an AST walk and not
-    a coefficient-loop interpreter. Hop and window come from the IR.
+    (1–3 stores) are packed once into lanes of a 64-bit word and
+    evaluated as straight-line C picked by shape (`s1` / `s2z` / `s2` /
+    `s3`): one multiply-add per source cell computes every store, a
+    byte extract per store writes it. `./bffsree -c` prints the maps.
+    Not an AST walk and not a coefficient-loop interpreter. Hop and
+    window come from the IR.
     The map also exposes run-once bodies (no drift, loop cell left at
     0), which stay inline in the dispatcher instead of a walker.
   - Nest templates: scan-carrying loops (which `LOOPRUN` cannot take)
     whose body matches a corpus-dominant structural signature run as
     one straight-line helper with all parameters in locals — the
     `LOOPRUN` helpers one level up. `./bffsree -c` prints every loop's
-    signature (`ZVRMV`, `VM{VRS}SmMV`, ...)
+    signature (`ZVRMV`, `VM{VRS}SmMV`, `SVFSV`, ...)
   - Block clears (`[-]>[-]>[-]`) → one `ZFILL`
   - Portable 64-bit acceleration for stride-3 scans in generated BF;
     other strides scan four cells per iteration
@@ -213,16 +229,33 @@ stopping lane is resolved after the loop (three in-loop tests cost
 GCC ~20% on fib/tree against Clang; one test costs neither). Every
 other stride scans four cells per iteration from four independent
 loads; the scalar loop is bound by one taken branch per cell, and
-mandelbrot scans 488M cells at stride 9 (553 → 480 ms). The scan may
+mandelbrot scans 488M cells at stride 9 (553 → 480 ms). The loop is
+written with one induction variable and a single exit: as four
+`return p + k*stride` exits, GCC kept four pointers live (four adds
+per iteration) and saved two callee registers around a 12-instruction
+loop, a quarter of mandelbrot's remaining instructions. The scan may
 read up to three strides past the zero it finds, which the sentinel
 pads absorb.
 
 **Walking loops** — loops with net pointer drift can't flatten, but
 one-op bodies run as a single op (`MZSCAN`, `VALSCAN`) and straight-line
 arithmetic bodies run without re-entering dispatch (`LOOPRUN`). Which
-internal helper a `LOOPRUN` uses (two 4-op copy-walk shapes, the
-affine shape evaluators, or the generic walker) is decoded once into
-the op, so an entry costs a cell test and a switch.
+internal helper a `LOOPRUN` or `MZSCAN` uses (two 4-op copy-walk
+shapes, the 9-cell-frame walk, the lane slides, the affine shape
+evaluators, or the generic walker) is decoded once into the op, so an
+entry costs a cell test and a switch.
+
+**Lane-packed affine evaluator** — a `LOOPRUN` body that is an affine
+map of up to four source cells into up to three stores is evaluated
+as one 64-bit accumulator: each store owns a 16-bit lane (twice the
+cell width), the map is packed once at optimize time into a bias word
+and one coefficient word per source, and a hop is four cell loads,
+four multiply-adds and one byte extract per store. Coefficients use
+signed representatives; a body whose lane could overflow is rejected
+at classification, not at run time. Nothing in the descriptor is read
+inside the loop, which matters because `bf_cell` is a character type
+and every tape store would otherwise force the descriptor to reload.
+Halved the instructions of mandelbrot's three-store walks.
 
 **Run-once loops** — a body with no pointer drift that leaves the loop
 cell at constant 0 is an if-block: `[` skips it when zero, and the `]`
@@ -242,6 +275,15 @@ loop bodies by direct dispatches (`make prof` with `BF_PROF_DUMP=1`):
 |---|---|---|
 | `ZVRMV` | `VAL_ZERO VAL` · `LOOPRUN` · `VAL_MZ VAL` | mandelbrot, 11 sites |
 | `VM{VRS}SmMV` | `VAL VAL_MZ` · `{VAL LOOPRUN PTR_S}` · `PTR_S MZSCAN` · `VAL_MZ VAL` | mandelbrot, 7 sites |
+| `SVFSV` / `SVSV` | `PTR_S VAL [ZFILL] PTR_S VAL` — scan out, mark, scan back, count | mandelbrot, 6 sites |
+
+The flat scan loops have no inner loop, so `LOOPRUN` could not take
+them and each of their 4-5 ops was a dispatch; they were 30M of
+mandelbrot's 81M. Inside a template the scan is inlined rather than
+called, and when `ZVRMV`'s `LOOPRUN` is the `VAL VAL_MUL VAL_MZ VAL_MZ`
+shape (mandelbrot's innermost loop) its walk is inlined too, with its
+thirteen parameters hoisted alongside the template's own: the body
+makes no calls at all.
 
 A *generic* nest runner was built first — the body cut into segments
 (affine block bound to a shape evaluator, scan, block helper, child
@@ -273,6 +315,17 @@ a 48-byte shift in its start address moved `factor` by 6%; `Eval` and
 every out-of-line helper are now `aligned(64)` so a function's speed
 depends only on its own code (`-DBF_HOT_ALIGN_BYTES=0` to disable,
 `-DBF_KEEP_CROSSJUMPING` to leave the pass on).
+
+The same applies inside `Eval`. Each opcode handler is ~60 bytes and
+GCC aligns computed-goto targets to 16, so where a handler straddled
+a 64-byte line depended on the code before it: a change to the
+`MZSCAN` handler moved `long`, which executes no `MZSCAN`, from 34 to
+39 ms at byte-identical instruction counts. `#pragma GCC
+optimize("align-jumps=64")` gives every handler its own line; both
+layouts then measure 33 ms and `factor`/mandelbrot are unchanged or
+better (`-DBF_KEEP_ALIGN_JUMPS` opts out). This was the last of the
+layout effects large enough to be mistaken for a code change: an edit
+that leaves instruction counts alone now leaves timings alone.
 
 ## IR Opcodes
 
