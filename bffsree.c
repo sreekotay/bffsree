@@ -207,35 +207,35 @@ static BF_NOINLINE bf_cell* bf_mzscan_copy(bf_cell* p, int foff, int dest, int b
     return p;
 }
 
-// Hottest dest-9 slides: lane +1 / +2 with boff = -(9+lane).
-static BF_NOINLINE bf_cell* bf_mzscan_copy9_from1(bf_cell* p) {
+// Hottest dest-9 slides: lane +1 / +2 with boff = -(9+lane). Walks
+// backward a frame at a time, moving the lane into the next frame.
+// Two frames per trip: the second move lands in the cell the first
+// just cleared, so it is a plain store, and one pointer step serves
+// both. On mandelbrot these run 16 frames per call.
+static BF_ALWAYS_INLINE bf_cell* bf_mzscan_copy9_walk(bf_cell* p, int lane) {
     if (*p) {
-        p += 1;
+        p += lane;
         for (;;) {
             bf_cell v = *p;
             *p = 0;
             p[9] += v;
-            p -= 10;
-            if (*p == 0) break;
-            p += 1;
+            if (p[-9 - lane] == 0) { p -= 9 + lane; break; }
+            v = p[-9];
+            p[-9] = 0;
+            *p += v;
+            if (p[-18 - lane] == 0) { p -= 18 + lane; break; }
+            p -= 18;
         }
     }
     return p;
 }
 
+static BF_NOINLINE bf_cell* bf_mzscan_copy9_from1(bf_cell* p) {
+    return bf_mzscan_copy9_walk(p, 1);
+}
+
 static BF_NOINLINE bf_cell* bf_mzscan_copy9_from2(bf_cell* p) {
-    if (*p) {
-        p += 2;
-        for (;;) {
-            bf_cell v = *p;
-            *p = 0;
-            p[9] += v;
-            p -= 11;
-            if (*p == 0) break;
-            p += 2;
-        }
-    }
-    return p;
+    return bf_mzscan_copy9_walk(p, 2);
 }
 
 // Slide one lane into the next 9-cell frame: p[9] += *p; *p = 0.
