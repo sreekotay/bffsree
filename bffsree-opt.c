@@ -985,6 +985,13 @@ int bf_Optimize(void** bfoptr, char* chars, int proglen, int printMetrics) {
     pc = bf_foldNoops(bfo, pc);
     pc = bf_fuseZeroFills(bfo, pc);
     bf_markLoopRuns(bfo, pc);
+    {
+        // Parameter blocks are final: bind each MZSCAN to its helper.
+        int k;
+        for (k = 0; k < pc; k++)
+            if (bfo[k].cmd == bfo_MZSCAN)
+                bfo[k].sub = (uint8_t)bf_mzscan_variant(bfo + k);
+    }
 #if BF_NEST
     bf_markNests(bfo, pc);
 #endif

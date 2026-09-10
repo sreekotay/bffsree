@@ -152,8 +152,15 @@ int bf_looprun_variant(const bf_op* L) {
         L[1].cmd == bfo_VAL_MZ && L[1].val == 1 &&
         L[2].cmd == bfo_VAL_MUL && L[2].val == 1 &&
         L[3].cmd == bfo_VAL_MZ && L[3].val == 1 &&
-        L[4].cmd == bfo_VAL)
+        L[4].cmd == bfo_VAL) {
+        // Hops one 9-cell record and touches only cells inside it.
+        const int foff = L->off;
+        if (L[4].off == 9 && L[1].off == -foff && L[2].off == 0 && L[3].off == 0 &&
+            L[1].buf == -foff && L[2].buf == foff &&
+            foff >= 0 && foff <= 8 && L[3].buf >= 0 && L[3].buf <= 8)
+            return BF_SEG_LOOPRUN_FRAME9;
         return BF_SEG_LOOPRUN_MZ_MUL_MZ_VAL;
+    }
     if (L->val == 5 &&
         L[1].cmd == bfo_VAL &&
         L[2].cmd == bfo_VAL_MUL &&
@@ -175,6 +182,16 @@ int bf_looprun_variant(const bf_op* L) {
     }
 #endif
     return BF_SEG_LOOPRUN;
+}
+
+int bf_mzscan_variant(const bf_op* M) {
+    if (M->buf != 0 || M[1].val != 1) return BF_MZ_GENERIC;
+    if (M[1].buf == 9) {
+        if (M->off == 1 && M[1].off == -10) return BF_MZ_COPY9_FROM1;
+        if (M->off == 2 && M[1].off == -11) return BF_MZ_COPY9_FROM2;
+        return BF_MZ_SLIDE9;
+    }
+    return BF_MZ_COPY;
 }
 
 #if !_refInterp
@@ -284,7 +301,8 @@ static BF_NOINLINE bf_cell* bf_frame9_mz_mul_mz_inc(
 }
 
 // Hottest LOOPRUN shape: decrement/walk, then VAL_MZ, VAL_MUL, VAL_MZ,
-// VAL. Uses a 9-cell frame walk when the hop and working set fit.
+// VAL. The 9-cell frame case is its own variant (BF_SEG_LOOPRUN_FRAME9),
+// selected at optimize time.
 static BF_NOINLINE bf_cell* bf_looprun_mz_mul_mz_val(
     bf_cell* p,
     bf_cell fbuf, int foff,
@@ -293,11 +311,6 @@ static BF_NOINLINE bf_cell* bf_looprun_mz_mul_mz_val(
     int c_buf, int c_off,
     bf_cell add, int d_off)
 {
-    if (d_off == 9 && a_off == -foff && b_off == 0 && c_off == 0 &&
-        a_buf == -foff && b_buf == foff &&
-        foff >= 0 && foff <= 8 && c_buf >= 0 && c_buf <= 8)
-        return bf_frame9_mz_mul_mz_inc(p, fbuf, foff, c_buf, add);
-
     if (*p) {
         *p += fbuf;
         p += foff;
@@ -554,6 +567,9 @@ static BF_NOINLINE bf_cell* bf_aff_walk_s3(
 // Stops at the failed loop test; the caller applies the REW slot.
 static inline bf_cell* bf_looprun_taken(bf_cell* p, bf_op* L, int variant) {
     switch (variant) {
+    case BF_SEG_LOOPRUN_FRAME9:
+        return bf_frame9_mz_mul_mz_inc(
+            p, (bf_cell)L->buf, L->off, L[3].buf, (bf_cell)L[4].val);
     case BF_SEG_LOOPRUN_MZ_MUL_MZ_VAL:
         return bf_looprun_mz_mul_mz_val(
             p, (bf_cell)L->buf, L->off,
@@ -590,35 +606,36 @@ static inline bf_cell* bf_run_looprun(bf_cell* p, bf_op* L) {
     return bf_apply_rew(p, L + L->val);
 }
 
-static inline bf_cell* bf_run_mzscan(bf_cell* p, bf_op* M) {
-    if (*p == 0) return bf_apply_rew(p, M + 2);
+// Run an MZSCAN whose cell is known nonzero, by pre-decoded variant.
+// Stops at the failed loop test; the caller applies the REW slot.
+static inline bf_cell* bf_mzscan_taken(bf_cell* p, bf_op* M, int variant) {
 #if !BF_PROFILE
-    if (M->buf == 0 && M[1].val == 1) {
-        if (M[1].buf == 9) {
-            if (M->off == 1 && M[1].off == -10)
-                p = bf_mzscan_copy9_from1(p);
-            else if (M->off == 2 && M[1].off == -11)
-                p = bf_mzscan_copy9_from2(p);
-            else
-                p = bf_mzscan_slide9(p, M->off, M[1].off);
-        } else
-            p = bf_mzscan_copy(p, M->off, M[1].buf, M[1].off);
-        return bf_apply_rew(p, M + 2);
+    switch (variant) {
+    case BF_MZ_COPY9_FROM1: return bf_mzscan_copy9_from1(p);
+    case BF_MZ_COPY9_FROM2: return bf_mzscan_copy9_from2(p);
+    case BF_MZ_SLIDE9:      return bf_mzscan_slide9(p, M->off, M[1].off);
+    case BF_MZ_COPY:        return bf_mzscan_copy(p, M->off, M[1].buf, M[1].off);
+    default: break;
     }
+#else
+    (void)variant;
 #endif
-    if (*p) {
+    *p += (bf_cell)M->buf;
+    p += M->off;
+    for (;;) {
+        p[M[1].buf] += (bf_cell)(M[1].val * *p);
+        *p = 0;
+        p += M[1].off;
+        if (*p == 0) break;
+        bf_prof_hit(M);
         *p += (bf_cell)M->buf;
         p += M->off;
-        for (;;) {
-            p[M[1].buf] += (bf_cell)(M[1].val * *p);
-            *p = 0;
-            p += M[1].off;
-            if (*p == 0) break;
-            bf_prof_hit(M);
-            *p += (bf_cell)M->buf;
-            p += M->off;
-        }
     }
+    return p;
+}
+
+static inline bf_cell* bf_run_mzscan(bf_cell* p, bf_op* M) {
+    if (*p) p = bf_mzscan_taken(p, M, M->sub);
     return bf_apply_rew(p, M + 2);
 }
 
@@ -696,6 +713,7 @@ static inline bf_cell* bf_nest_seg(bf_cell* p, bf_op* L, const bf_seg* g) {
         return bf_run_valscan(p, L + g->a);
     case BF_SEG_LOOPRUN:
     case BF_SEG_LOOPRUN_MZ_MUL_MZ_VAL:
+    case BF_SEG_LOOPRUN_FRAME9:
     case BF_SEG_LOOPRUN_VAL_MUL_MZ_MZ:
     case BF_SEG_LOOPRUN_AFF_S1:
     case BF_SEG_LOOPRUN_AFF_S2Z:
@@ -804,6 +822,8 @@ static BF_NOINLINE bf_cell* bf_nest_t_vm_vrs_s_m_mv(bf_cell* p, bf_op* L) {
     const int     s1    = S1->val;          const int s1off = S1->off;
     const bf_cell FRbuf = (bf_cell)FR->buf; const int FRoff = FR->off;
     const int     s2    = S2->val;          const int s2off = S2->off;
+    const int     zsub  = Z->sub;
+    const bf_cell zrbuf = (bf_cell)Z[2].buf; const int zroff = Z[2].off;
     const int     m2buf = M2->buf;          const int m2off = M2->off;
     const bf_cell m2val = (bf_cell)M2->val;
     const bf_cell v3    = (bf_cell)V3->val; const int v3off = V3->off;
@@ -836,7 +856,9 @@ static BF_NOINLINE bf_cell* bf_nest_t_vm_vrs_s_m_mv(bf_cell* p, bf_op* L) {
         p += FRoff;
         if (*p) p = bf_scan_stride(p, s2);
         p += s2off;
-        p = bf_run_mzscan(p, Z);
+        if (*p) p = bf_mzscan_taken(p, Z, zsub);
+        *p += zrbuf;
+        p += zroff;
         p[m2buf] += (bf_cell)(m2val * *p);
         *p = 0;
         p += m2off;
@@ -1153,19 +1175,12 @@ DONE:
 #else
     #define _op_MZSCAN(P) \
         do { \
-            if ((P)->buf == 0 && (P)[1].val == 1) { \
-                tp = ptr + sp; \
-                if ((P)[1].buf == 9) { \
-                    if ((P)->off == 1 && (P)[1].off == -10) \
-                        tp = bf_mzscan_copy9_from1(tp); \
-                    else if ((P)->off == 2 && (P)[1].off == -11) \
-                        tp = bf_mzscan_copy9_from2(tp); \
-                    else \
-                        tp = bf_mzscan_slide9(tp, (P)->off, (P)[1].off); \
-                } else \
-                    tp = bf_mzscan_copy(tp, (P)->off, (P)[1].buf, (P)[1].off); \
-                sp = (int)(tp - ptr); \
-                _bf_bound_sp(); \
+            if ((P)->sub != BF_MZ_GENERIC) { \
+                if (ptr[sp] != 0) { \
+                    tp = bf_mzscan_taken(ptr + sp, (P), (P)->sub); \
+                    sp = (int)(tp - ptr); \
+                    _bf_bound_sp(); \
+                } \
                 (P) += 2; \
                 ptr[sp] += (bf_cell)(P)->buf; \
             } else { \

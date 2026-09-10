@@ -88,6 +88,7 @@ void bffsree_Print(bf_VM* vm, char* inp, int lang) {
                         case BF_SEG_VALSCAN: printf(" valscan@%d", i + g->a); break;
                         case BF_SEG_LOOPRUN:
                         case BF_SEG_LOOPRUN_MZ_MUL_MZ_VAL:
+                        case BF_SEG_LOOPRUN_FRAME9:
                         case BF_SEG_LOOPRUN_VAL_MUL_MZ_MZ:
                         case BF_SEG_LOOPRUN_AFF_S1:
                         case BF_SEG_LOOPRUN_AFF_S2Z:

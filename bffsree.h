@@ -125,6 +125,7 @@ enum {
     BF_SEG_VALSCAN,
     BF_SEG_LOOPRUN,   /* LOOPRUN, generic walker; variants bound at compile time: */
     BF_SEG_LOOPRUN_MZ_MUL_MZ_VAL,
+    BF_SEG_LOOPRUN_FRAME9,   /* MZ_MUL_MZ_VAL whose working set is one 9-cell record */
     BF_SEG_LOOPRUN_VAL_MUL_MZ_MZ,
     BF_SEG_LOOPRUN_AFF_S1,
     BF_SEG_LOOPRUN_AFF_S2Z,
@@ -277,6 +278,16 @@ int            bf_nest_count(void);
 // shared by the Eval arm and the nest compiler so the choice is made
 // once per site rather than once per entry.
 int bf_looprun_variant(const bf_op *L);
+
+// Same for MZSCAN (stored in the header op's sub).
+enum {
+    BF_MZ_GENERIC = 0,  /* parameterized walk from the op fields */
+    BF_MZ_COPY9_FROM1,  /* lane +1 into the next 9-cell record */
+    BF_MZ_COPY9_FROM2,  /* lane +2 */
+    BF_MZ_SLIDE9,       /* any lane, dest 9 */
+    BF_MZ_COPY          /* buf == 0, val == 1: plain move */
+};
+int bf_mzscan_variant(const bf_op *M);
 
 #if BF_AFFINE
 // Sparse affine map for one LOOPRUN body, relative to the pointer at
