@@ -39,8 +39,10 @@
 #endif
 #if defined(__GNUC__)
 #define BF_NOINLINE __attribute__((noinline)) BF_HOT_ALIGN
+#define BF_ALWAYS_INLINE inline __attribute__((always_inline))
 #else
 #define BF_NOINLINE
+#define BF_ALWAYS_INLINE inline
 #endif
 
 #if BF_WORD_SCAN && BF_CELL_BITS == 8 && !_refInterp
@@ -383,7 +385,39 @@ static BF_NOINLINE bf_cell* bf_apply_ptr_s(bf_cell* p, int stride) {
 }
 
 #if !BF_PROFILE
-// Common 4-op LOOPRUN: VAL, VAL_MUL, VAL_MZ, VAL_MZ.
+// Common 4-op LOOPRUN: VAL, VAL_MUL, VAL_MZ, VAL_MZ. *p != 0 on entry.
+// The body is a forced-inline function so the nest template that
+// contains this loop can hoist its thirteen parameters into locals
+// once instead of marshaling them (seven on the stack, six saved
+// registers) on every entry.
+static BF_ALWAYS_INLINE bf_cell* bf_walk_val_mul_mz_mz(
+    bf_cell* p,
+    bf_cell fbuf, int foff,
+    bf_cell add, int a_off,
+    int b_val, int b_buf, int b_off,
+    int c_val, int c_buf, int c_off,
+    int d_val, int d_buf, int d_off)
+{
+    *p += fbuf;
+    p += foff;
+    for (;;) {
+        *p += add;
+        p += a_off;
+        p[b_buf] += (bf_cell)(b_val * *p);
+        p += b_off;
+        p[c_buf] += (bf_cell)(c_val * *p);
+        *p = 0;
+        p += c_off;
+        p[d_buf] += (bf_cell)(d_val * *p);
+        *p = 0;
+        p += d_off;
+        if (*p == 0) break;
+        *p += fbuf;
+        p += foff;
+    }
+    return p;
+}
+
 static BF_NOINLINE bf_cell* bf_looprun_val_mul_mz_mz(
     bf_cell* p,
     bf_cell fbuf, int foff,
@@ -392,25 +426,10 @@ static BF_NOINLINE bf_cell* bf_looprun_val_mul_mz_mz(
     int c_val, int c_buf, int c_off,
     int d_val, int d_buf, int d_off)
 {
-    if (*p) {
-        *p += fbuf;
-        p += foff;
-        for (;;) {
-            *p += add;
-            p += a_off;
-            p[b_buf] += (bf_cell)(b_val * *p);
-            p += b_off;
-            p[c_buf] += (bf_cell)(c_val * *p);
-            *p = 0;
-            p += c_off;
-            p[d_buf] += (bf_cell)(d_val * *p);
-            *p = 0;
-            p += d_off;
-            if (*p == 0) break;
-            *p += fbuf;
-            p += foff;
-        }
-    }
+    if (*p)
+        p = bf_walk_val_mul_mz_mz(p, fbuf, foff, add, a_off,
+                                  b_val, b_buf, b_off, c_val, c_buf, c_off,
+                                  d_val, d_buf, d_off);
     return p;
 }
 #endif
@@ -691,8 +710,32 @@ static inline bf_cell* bf_nest_seg(bf_cell* p, bf_op* L, const bf_seg* g) {
 }
 
 // Template "ZVRMV": VAL_ZERO VAL | LOOPRUN | VAL_MZ VAL. Everything
-// the body needs is in locals; the only call is the (already
-// specialized) LOOPRUN helper, and only when its cell is nonzero.
+// the body needs is in locals. When the LOOPRUN is the VAL_MUL_MZ_MZ
+// shape (mandelbrot's innermost loop) its walk is inlined with its
+// parameters hoisted too, so the body makes no calls at all; other
+// shapes go through the specialized helper, and only when the cell
+// is nonzero.
+#define BF_T_ZV_R_MV_LOOP(RUN) do { \
+    *p += fbuf; \
+    p += foff; \
+    for (;;) { \
+        *p = zval; \
+        p += zoff; \
+        *p += v1; \
+        p += v1off; \
+        if (*p) RUN; \
+        *p += rbuf; \
+        p += roff; \
+        p[mbuf] += (bf_cell)(mval * *p); \
+        *p = 0; \
+        p += moff; \
+        *p += v2; \
+        p += v2off; \
+        if (*p == 0) break; \
+        *p += fbuf; \
+        p += foff; \
+    } } while (0)
+
 static BF_NOINLINE bf_cell* bf_nest_t_zv_r_mv(bf_cell* p, bf_op* L) {
     bf_op* Z  = L + 1;
     bf_op* V1 = L + 2;
@@ -709,27 +752,22 @@ static BF_NOINLINE bf_cell* bf_nest_t_zv_r_mv(bf_cell* p, bf_op* L) {
     const bf_cell mval = (bf_cell)M->val;
     const bf_cell v2   = (bf_cell)V2->val; const int v2off = V2->off;
 
-    *p += fbuf;
-    p += foff;
-    for (;;) {
-        *p = zval;
-        p += zoff;
-        *p += v1;
-        p += v1off;
-        if (*p) p = bf_looprun_taken(p, R, rsub);
-        *p += rbuf;
-        p += roff;
-        p[mbuf] += (bf_cell)(mval * *p);
-        *p = 0;
-        p += moff;
-        *p += v2;
-        p += v2off;
-        if (*p == 0) break;
-        *p += fbuf;
-        p += foff;
+    if (rsub == BF_SEG_LOOPRUN_VAL_MUL_MZ_MZ) {
+        const bf_cell Rbuf = (bf_cell)R->buf;    const int Roff  = R->off;
+        const bf_cell aadd = (bf_cell)R[1].val;  const int aoff  = R[1].off;
+        const int bval = R[2].val, bbuf = R[2].buf, boff = R[2].off;
+        const int cval = R[3].val, cbuf = R[3].buf, coff = R[3].off;
+        const int dval = R[4].val, dbuf = R[4].buf, doff = R[4].off;
+        BF_T_ZV_R_MV_LOOP(
+            p = bf_walk_val_mul_mz_mz(p, Rbuf, Roff, aadd, aoff,
+                                      bval, bbuf, boff, cval, cbuf, coff,
+                                      dval, dbuf, doff));
+        return p;
     }
+    BF_T_ZV_R_MV_LOOP(p = bf_looprun_taken(p, R, rsub));
     return p;
 }
+#undef BF_T_ZV_R_MV_LOOP
 
 // Template "VM{VRS}SmMV": VAL VAL_MZ | { VAL LOOPRUN PTR_S } | PTR_S
 // MZSCAN | VAL_MZ VAL. The nested loop is inlined; every loop-carrying
