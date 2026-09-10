@@ -22,6 +22,20 @@
 #pragma GCC optimize("no-crossjumping")
 #endif
 
+// Each opcode handler is ~60 bytes, and Eval on a dispatch-bound
+// program (long: 41M dispatches, ~2.7 cycles each) runs at whatever
+// rate the frontend can fetch them. GCC aligns computed-goto targets
+// to 16, so where a handler straddles 64-byte lines depended on the
+// code before it: an edit that never executes (an MZSCAN macro
+// change, with long executing no MZSCAN) moved long from 34 to 39 ms
+// with byte-identical instruction counts. Aligning jump-only targets
+// to 64 gives every handler its own line; both layouts then measure
+// 33 ms. Cold jump targets in the helpers pick up padding, nothing
+// else. -DBF_KEEP_ALIGN_JUMPS leaves the compiler default.
+#if defined(__GNUC__) && !defined(__clang__) && !defined(BF_KEEP_ALIGN_JUMPS)
+#pragma GCC optimize("align-jumps=64")
+#endif
+
 // Hot functions start on a 64-byte boundary. Without this, the dispatch
 // loop's position relative to fetch / uop-cache windows depended on the
 // size of every function linked before it, and an edit to an unrelated
