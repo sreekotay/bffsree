@@ -368,7 +368,9 @@ const char      *bf_affine_kind_name(int kind);
 // VM API (header-only like original)
 // -----------------------------
 static int bf_putc(void* f, int c) { (void)f; return putchar(c); }
-static int bf_getc(void* f)        { return f ? getc((FILE*)f) : getchar(); }
+// Flush before blocking on input: a frontend on the other end of a pipe
+// (DoomBF's frnt) waits for the rest of the frame before sending keys.
+static int bf_getc(void* f)        { fflush(stdout); return f ? getc((FILE*)f) : getchar(); }
 
 static int bf_VM_alloc(bf_VM* bp) {
     memset(bp, 0, sizeof(*bp));
