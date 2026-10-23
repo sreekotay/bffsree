@@ -1335,28 +1335,124 @@ static int bf_readfile(char** data, FILE* fh) {
     return ci;
 }
 
+#if !_refInterp
+// =====================================================================
+// bpk loader - run-length Brainfuck ("+{3}" == "+++", count in hex).
+// Every non-command byte is a comment, including '!'. A run becomes one
+// weighted token (split at the optimizer's per-token caps), so a
+// program that expands to trillions of commands loads at its packed size.
+// =====================================================================
+typedef struct bf_bpk {
+    char*    prog;
+    int32_t* rep;
+    size_t   len, cap;
+} bf_bpk;
+
+static int bf_bpk_push(bf_bpk* b, int tok, int32_t w) {
+    if (b->len + 1 >= b->cap) {
+        size_t nc = b->cap ? b->cap * 2 : (size_t)1 << 16;
+        char* np = (char*)realloc(b->prog, nc);
+        int32_t* nr;
+        if (!np) return -1;
+        b->prog = np;
+        nr = (int32_t*)realloc(b->rep, nc * sizeof(int32_t));
+        if (!nr) return -1;
+        b->rep = nr;
+        b->cap = nc;
+    }
+    if (b->len >= 0x7ffffff0u) return -1;
+    b->prog[b->len] = (char)tok;
+    b->rep[b->len]  = w;
+    b->len++;
+    return 0;
+}
+
+static int bf_bpk_emit(bf_bpk* b, int tok, uint64_t n) {
+    uint64_t cap = 1;
+    if (tok == bf_GT || tok == bf_LT) {
+        cap = (uint64_t)bf_run_cap_ptr();
+    } else if (tok == bf_PLUS || tok == bf_MINUS) {
+        const uint64_t mod = (uint64_t)1 << BF_CELL_BITS;
+        n &= mod - 1;
+        if (n > mod / 2) { n = mod - n; tok = (tok == bf_PLUS) ? bf_MINUS : bf_PLUS; }
+        cap = (uint64_t)bf_run_cap_val();
+    }
+    while (n > 0) {
+        uint64_t w = n < cap ? n : cap;
+        if (bf_bpk_push(b, tok, (int32_t)w)) return -1;
+        n -= w;
+    }
+    return 0;
+}
+
+static int bf_readbpk(bf_bpk* b, FILE* fh, const unsigned char* dc) {
+    int c, pend = 0;
+    uint64_t n = 0;
+    while ((c = getc(fh)) != EOF) {
+        if (c == '{') {
+            uint64_t v = 0;
+            while ((c = getc(fh)) != EOF && c != '}') {
+                if      (c >= '0' && c <= '9') v = v * 16 + (uint64_t)(c - '0');
+                else if (c >= 'a' && c <= 'f') v = v * 16 + (uint64_t)(c - 'a' + 10);
+                else if (c >= 'A' && c <= 'F') v = v * 16 + (uint64_t)(c - 'A' + 10);
+                else { printf("// bpk: bad repeat digit [%c]\n", c); return -1; }
+            }
+            if (pend) n = v;
+            continue;
+        }
+        if (pend && bf_bpk_emit(b, pend, n)) return -1;
+        pend = dc[(unsigned char)c];
+        n = 1;
+    }
+    if (pend && bf_bpk_emit(b, pend, n)) return -1;
+    return bf_bpk_push(b, 0, 1);
+}
+
+static int bf_endswith(const char* s, const char* suf) {
+    size_t ls = strlen(s), lf = strlen(suf);
+    return ls >= lf && strcmp(s + ls - lf, suf) == 0;
+}
+#endif
+
+static long bf_parsecells(const char* s) {
+    char* end;
+    long v = strtol(s, &end, 10);
+    if      (*end == 'K' || *end == 'k') v <<= 10;
+    else if (*end == 'M' || *end == 'm') v <<= 20;
+    else if (*end == 'G' || *end == 'g') v <<= 30;
+    return v;
+}
+
 // =====================================================================
 // main
 // =====================================================================
 int bffsree_Main(int argc, char* argv[]) {
-    int carg = 1, proglen, printBF = 0, i;
+    int proglen, printBF = 0, i, bpk = 0;
     int ci = 0, c, ps = 0, psh = 0, lc = 0, metric = 0;
+    long tapecells = 0;
     char *prog = 0, *inp = 0;
+    const char* fname = 0;
+    int32_t* rep = 0;
     unsigned char dc[256] = {0};
     bf_VM_help* progHelp = 0;
     bf_VM vm;
     FILE* fh = 0;
+    int carg;
 
     // options
     for (i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "-c") == 0)      { if (i == 1) carg++; printBF = 1; }
-        else if (strcmp(argv[i], "-j") == 0) { if (i == 1) carg++; printBF = 2; }
-        else if (strcmp(argv[i], "-m") == 0) { if (i == 1) carg++; metric = 1; }
+        if (strcmp(argv[i], "-c") == 0)      printBF = 1;
+        else if (strcmp(argv[i], "-j") == 0) printBF = 2;
+        else if (strcmp(argv[i], "-m") == 0) metric = 1;
+        else if (strcmp(argv[i], "-p") == 0) bpk = 1;
+        else if (strcmp(argv[i], "-t") == 0 && i + 1 < argc) tapecells = bf_parsecells(argv[++i]);
+        else if (!fname) fname = argv[i];
     }
+    if (tapecells < 0 || tapecells > 0x7fff0000L) { printf("// bad tape size\n"); return -1; }
 
-    if (argc > carg) {
-        fh = fopen(argv[carg], "r");
-        if (fh == 0) { printf("//unable to open file [%s]\n", argv[carg]); return -1; }
+    if (fname) {
+        fh = fopen(fname, "rb");
+        if (fh == 0) { printf("//unable to open file [%s]\n", fname); return -1; }
     } else {
         fh = stdin;
     }
@@ -1364,6 +1460,24 @@ int bffsree_Main(int argc, char* argv[]) {
     // read program
     dc['>'] = bf_GT;     dc['<'] = bf_LT;    dc['+'] = bf_PLUS; dc['-'] = bf_MINUS;
     dc['.'] = bf_PERIOD; dc[','] = bf_COMMA; dc['['] = bf_OPEN; dc[']'] = bf_CLOSE;
+#if _refInterp
+    if (bpk) { printf("// bpk input needs the optimizing build\n"); return -1; }
+#else
+    if (fname && bf_endswith(fname, ".bpk")) bpk = 1;
+    if (bpk) {
+        bf_bpk b = {0, 0, 0, 0};
+        if (bf_readbpk(&b, fh, dc)) {
+            printf("// bpk: load failed\n");
+            free(b.prog); free(b.rep);
+            if (fh != stdin) fclose(fh);
+            return -1;
+        }
+        prog = b.prog; rep = b.rep; ci = (int)b.len;
+        c = 0;
+        if (!tapecells) tapecells = 1L << 29;
+        goto LOADED;
+    }
+#endif
     while ((c = getc(fh)) > 0) {
         if (c == '!') break;  // input
         if (c == '%' || c == ';')  // comment
@@ -1407,19 +1521,30 @@ int bffsree_Main(int argc, char* argv[]) {
         }
     }
     prog[ci++] = 0;
-    proglen = ci;
     prog = (char*)realloc(prog, (size_t)ci);
-    (void)psh; (void)lc;
     if (c == '!') bf_readfile(&inp, fh);
+#if !_refInterp
+LOADED:
+#endif
+    proglen = ci;
+    (void)psh; (void)lc; (void)carg; (void)rep;
     if (fh && fh != stdin) fclose(fh);
 
     // run
     bf_VM_alloc(&vm);
-    bf_VM_tape(&vm, bf_MAXCELLS);
+    if (bf_VM_tape(&vm, tapecells ? (int)tapecells : bf_MAXCELLS)) {
+        printf("// unable to allocate tape\n");
+        return -1;
+    }
     vm.prog       = prog;
     vm.progLen    = proglen;
     vm.progHelper = progHelp;
+#if _refInterp
     vm.progLen_op = bf_Optimize(&vm.prog_op, vm.prog, vm.progLen, metric);
+#else
+    vm.progLen_op = bf_OptimizeRep(&vm.prog_op, vm.prog, rep, vm.progLen, metric);
+    free(rep);
+#endif
     if (vm.progLen_op < 0) {  // parse error already reported; don't run
         bf_VM_free(&vm);
         if (inp) free(inp);
