@@ -47,6 +47,33 @@ static int progscan(int* ptroff, char* chars, int pc, int proglen, int plusTok, 
 // =====================================================================
 // brainfuck - loop optimization (original version)
 // =====================================================================
+// Per-offset flags for one loop body. Offsets within +-255 index a
+// window; farther ones (machine-generated code moves cells megabytes
+// apart) go in a short side table. Lookups past the table, or offsets
+// the op fields can't hold, fail and the loop stays unoptimized.
+#define BF_VT_NEAR 255
+#define BF_VT_FAR  32
+#define BF_VT_REACH (BF_OP_BUF_MAX < BF_OFF_MAX / 4 ? BF_OP_BUF_MAX : BF_OFF_MAX / 4)
+
+typedef struct bf_vtrack {
+    char near[2 * BF_VT_NEAR + 1];
+    int  far_off[BF_VT_FAR];
+    char far_flag[BF_VT_FAR];
+    int  nfar;
+} bf_vtrack;
+
+static char* bf_vt(bf_vtrack* t, long i) {
+    int k;
+    if (i >= -BF_VT_NEAR && i <= BF_VT_NEAR) return &t->near[i + BF_VT_NEAR];
+    if (i < -(long)BF_VT_REACH || i > (long)BF_VT_REACH) return 0;
+    for (k = 0; k < t->nfar; k++)
+        if (t->far_off[k] == (int)i) return &t->far_flag[k];
+    if (t->nfar >= BF_VT_FAR) return 0;
+    t->far_off[t->nfar] = (int)i;
+    t->far_flag[t->nfar] = 0;
+    return &t->far_flag[t->nfar++];
+}
+
 static int optimizeLoop(bf_op* bfo, int s) {
     int pc = s;
     int canopt = 1;
@@ -54,8 +81,8 @@ static int optimizeLoop(bf_op* bfo, int s) {
     int skip, rc, sp, nsp, haszero = 0;
     enum ebfo_CMD cmd;
     bf_op *opptr, opstack[128];
-    char vtrackspace[512] = {0};
-    char *vtrack = vtrackspace + 256;
+    bf_vtrack vt;
+    char *a, *b;
 
     // ============================
     // Can we optimize this loop?
@@ -63,40 +90,42 @@ static int optimizeLoop(bf_op* bfo, int s) {
     if (bfo[pc].cmd != bfo_FWD) {
         return -1;
     }
+    memset(vt.near, 0, sizeof(vt.near));
+    vt.nfar = 0;
     lc = bfo[pc].buf;
     sp = bfo[pc].off;
     pc++;
 
     // read = 1, modify = 2, set = 4
     #define _loop_var(a) (((a) & 7) > 2)  // once modified, we can't read safely
-    #define _vt_bad(i)   ((i) < -255 || (i) > 255)  // outside vtrack window
+    #define vtrack(i)    (*bf_vt(&vt, (i)))  // only after a successful bf_vt
     while (canopt && (cmd = (enum ebfo_CMD)bfo[pc].cmd) != bfo_REW) {
-        if (_vt_bad(sp)) { canopt = 0; break; }
+        if (!(a = bf_vt(&vt, sp))) { canopt = 0; break; }
         switch (cmd) {
         case bfo_VAL:
             if (sp == 0) lc += bfo[pc].val;
-            else vtrack[sp] |= 2 | 1;
+            else *a |= 2 | 1;
             break;
 
         case bfo_VAL_MUL:
-            if (_vt_bad(sp + bfo[pc].buf)) { canopt = 0; break; }
-            if (_loop_var(vtrack[sp])) canopt = 0;
-            if (_loop_var(vtrack[sp + bfo[pc].buf])) canopt = 0;
-            vtrack[sp + bfo[pc].buf] |= 2 | 1;
-            vtrack[sp] |= 1;
+            if (!(b = bf_vt(&vt, (long)sp + bfo[pc].buf))) { canopt = 0; break; }
+            if (_loop_var(*a)) canopt = 0;
+            if (_loop_var(*b)) canopt = 0;
+            *b |= 2 | 1;
+            *a |= 1;
             if (sp == 0) canopt = 0;
             break;
 
         case bfo_VAL_MZ:
-            if (_vt_bad(sp + bfo[pc].buf)) { canopt = 0; break; }
-            if (_loop_var(vtrack[sp + bfo[pc].buf])) canopt = 0;
+            if (!(b = bf_vt(&vt, (long)sp + bfo[pc].buf))) { canopt = 0; break; }
+            if (_loop_var(*b)) canopt = 0;
             // fall through
 
         case bfo_VAL_ZERO:
-            vtrack[sp] |= 4;
+            *a |= 4;
             if (cmd == bfo_VAL_MZ) {
-                vtrack[sp] |= 1;
-                vtrack[sp + bfo[pc].buf] |= 2 | 1;
+                *a |= 1;
+                *b |= 2 | 1;
             }
             if (sp == 0 || sp + bfo[pc].buf == 0) canopt = 0;
             if (sp == 0) lc = 0;
@@ -119,7 +148,7 @@ static int optimizeLoop(bf_op* bfo, int s) {
     }
 
     // has to be a simple loop -- balanced and dec by 1
-    if (canopt == 0 || sp != 0 || lc != -1 || (vtrack[0] & 2) == 2)
+    if (canopt == 0 || sp != 0 || lc != -1 || (vtrack(0) & 2) == 2)
         return -1;
 
     // ============================
@@ -155,7 +184,7 @@ static int optimizeLoop(bf_op* bfo, int s) {
             nsp = sp;
             sp += bfo[pc].off;
             _bfe_vob(bfo[pc], bfo_VAL_MUL, bfo[pc].val, 0, nsp);
-            vtrack[nsp] |= 8;
+            vtrack(nsp) |= 8;
             break;
 
         case bfo_VAL_MUL:
@@ -163,12 +192,12 @@ static int optimizeLoop(bf_op* bfo, int s) {
             nsp = sp;
             sp += bfo[pc].off + nsp;
             bfo[pc + 1] = bfo[pc];
-            if (vtrack[nsp] & 8) {
+            if (vtrack(nsp) & 8) {
                 _bfe_vob(bfo[pc], bfo_NOOP, 0, nsp, 0);
-                vtrack[nsp] |= 16;
+                vtrack(nsp) |= 16;
             } else {
                 _bfe_vob(bfo[pc], bfo_MUL_MUL, 1, nsp, nsp);
-                vtrack[nsp] |= 16 | 8;
+                vtrack(nsp) |= 16 | 8;
             }
             pc++;
             bfo[pc].off = (bf_off_t)(-nsp);
@@ -180,7 +209,7 @@ static int optimizeLoop(bf_op* bfo, int s) {
             sp += bfo[pc].off + nsp;
             bfo[pc + 1] = bfo[pc];
             _bfe_vob(bfo[pc], bfo_NOOP, 0, nsp, 0);
-            vtrack[nsp] |= 16;
+            vtrack(nsp) |= 16;
             pc++;
             bfo[pc].off = (bf_off_t)(-nsp);
             break;
@@ -225,7 +254,7 @@ static int optimizeLoop(bf_op* bfo, int s) {
     if (opptr != opstack) free(opptr);
     return pc;
     #undef _loop_var
-    #undef _vt_bad
+    #undef vtrack
 }
 
 // ----------------------------
