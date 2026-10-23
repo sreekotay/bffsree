@@ -27,10 +27,11 @@ HEADERS  = bffsree.h bffsree.c bffsree-opt.c
 CELL_BITS   ?= 8
 CELL_SIGNED ?= 0
 OP_BUF_BITS ?= 16
+OFF_BITS    ?= 16
 
 CFLAGS += -DBF_CELL_BITS=$(CELL_BITS)
 CFLAGS += -DBF_CELL_SIGNED=$(CELL_SIGNED)
-CFLAGS += -DBF_OP_BUF_BITS=$(OP_BUF_BITS)
+CFLAGS += -DBF_OP_BUF_BITS=$(OP_BUF_BITS) -DBF_OFF_BITS=$(OFF_BITS)
 
 # Default target
 all: $(TARGET)
@@ -39,11 +40,11 @@ $(TARGET): $(SRCS) $(HEADERS)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(SRCS)
 
 # Debug build with symbols and no optimization
-debug: CFLAGS = -Wall -Wextra -g -O0 -DBF_CELL_BITS=$(CELL_BITS) -DBF_CELL_SIGNED=$(CELL_SIGNED) -DBF_OP_BUF_BITS=$(OP_BUF_BITS)
+debug: CFLAGS = -Wall -Wextra -g -O0 -DBF_CELL_BITS=$(CELL_BITS) -DBF_CELL_SIGNED=$(CELL_SIGNED) -DBF_OP_BUF_BITS=$(OP_BUF_BITS) -DBF_OFF_BITS=$(OFF_BITS)
 debug: $(TARGET)
 
 # Release build with maximum optimization
-release: CFLAGS = -Wall -Wextra -O3 -DNDEBUG -DBF_CELL_BITS=$(CELL_BITS) -DBF_CELL_SIGNED=$(CELL_SIGNED) -DBF_OP_BUF_BITS=$(OP_BUF_BITS)
+release: CFLAGS = -Wall -Wextra -O3 -DNDEBUG -DBF_CELL_BITS=$(CELL_BITS) -DBF_CELL_SIGNED=$(CELL_SIGNED) -DBF_OP_BUF_BITS=$(OP_BUF_BITS) -DBF_OFF_BITS=$(OFF_BITS)
 release: $(TARGET)
 
 # Fast build: drops the per-dispatch bounds check (tape sentinel pads
@@ -52,16 +53,22 @@ release: $(TARGET)
 # default stays fully checked. If you want to chase the last few
 # percent, standard gcc PGO (-fprofile-generate / -fprofile-use) on
 # top of these flags adds ~0-5% depending on code layout luck.
-fast: CFLAGS = -Wall -Wextra -O3 -DNDEBUG -DBF_FAST -march=native -DBF_CELL_BITS=$(CELL_BITS) -DBF_CELL_SIGNED=$(CELL_SIGNED) -DBF_OP_BUF_BITS=$(OP_BUF_BITS)
+fast: CFLAGS = -Wall -Wextra -O3 -DNDEBUG -DBF_FAST -march=native -DBF_CELL_BITS=$(CELL_BITS) -DBF_CELL_SIGNED=$(CELL_SIGNED) -DBF_OP_BUF_BITS=$(OP_BUF_BITS) -DBF_OFF_BITS=$(OFF_BITS)
 fast: $(TARGET)
 
 # Profiling build: dumps a dynamic op histogram and the hottest loop
 # sites to stderr after the run
-prof: CFLAGS = -Wall -Wextra -O3 -DNDEBUG -DBF_PROFILE=1 -DBF_CELL_BITS=$(CELL_BITS) -DBF_CELL_SIGNED=$(CELL_SIGNED) -DBF_OP_BUF_BITS=$(OP_BUF_BITS)
+prof: CFLAGS = -Wall -Wextra -O3 -DNDEBUG -DBF_PROFILE=1 -DBF_CELL_BITS=$(CELL_BITS) -DBF_CELL_SIGNED=$(CELL_SIGNED) -DBF_OP_BUF_BITS=$(OP_BUF_BITS) -DBF_OFF_BITS=$(OFF_BITS)
 prof: $(TARGET)
 
+# Wide build for machine-generated programs that move the head
+# millions of cells at a time (DoomBF): 32-bit pointer deltas and
+# loop-move targets. Same speed on the benchmark corpus.
+wide: CFLAGS = -Wall -Wextra -O3 -DNDEBUG -DBF_CELL_BITS=$(CELL_BITS) -DBF_CELL_SIGNED=$(CELL_SIGNED) -DBF_OP_BUF_BITS=32 -DBF_OFF_BITS=32
+wide: $(TARGET)
+
 # Reference interpreter (non-optimized IR, for comparison)
-ref: CFLAGS = -Wall -Wextra -O3 -DNDEBUG -D_refInterp=1 -DBF_CELL_BITS=$(CELL_BITS) -DBF_CELL_SIGNED=$(CELL_SIGNED) -DBF_OP_BUF_BITS=$(OP_BUF_BITS)
+ref: CFLAGS = -Wall -Wextra -O3 -DNDEBUG -D_refInterp=1 -DBF_CELL_BITS=$(CELL_BITS) -DBF_CELL_SIGNED=$(CELL_SIGNED) -DBF_OP_BUF_BITS=$(OP_BUF_BITS) -DBF_OFF_BITS=$(OFF_BITS)
 ref: $(TARGET)
 
 # Clean build artifacts
@@ -118,9 +125,9 @@ test-compare:
 .PHONY: all debug release ref prof fast cell16 cell32 clean test metrics bench compare test-compare
 
 # 16-bit cell build
-cell16: CFLAGS = -Wall -Wextra -O3 -DBF_CELL_BITS=16 -DBF_CELL_SIGNED=0 -DBF_OP_BUF_BITS=$(OP_BUF_BITS)
+cell16: CFLAGS = -Wall -Wextra -O3 -DBF_CELL_BITS=16 -DBF_CELL_SIGNED=0 -DBF_OP_BUF_BITS=$(OP_BUF_BITS) -DBF_OFF_BITS=$(OFF_BITS)
 cell16: $(TARGET)
 
 # 32-bit cell build  
-cell32: CFLAGS = -Wall -Wextra -O3 -DBF_CELL_BITS=32 -DBF_CELL_SIGNED=0 -DBF_OP_BUF_BITS=$(OP_BUF_BITS)
+cell32: CFLAGS = -Wall -Wextra -O3 -DBF_CELL_BITS=32 -DBF_CELL_SIGNED=0 -DBF_OP_BUF_BITS=$(OP_BUF_BITS) -DBF_OFF_BITS=$(OFF_BITS)
 cell32: $(TARGET)
