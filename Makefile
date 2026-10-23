@@ -26,8 +26,8 @@ HEADERS  = bffsree.h bffsree.c bffsree-opt.c
 # Example: make CELL_BITS=16 CELL_SIGNED=1
 CELL_BITS   ?= 8
 CELL_SIGNED ?= 0
-OP_BUF_BITS ?= 16
-OFF_BITS    ?= 16
+OP_BUF_BITS ?= 32
+OFF_BITS    ?= 32
 
 CFLAGS += -DBF_CELL_BITS=$(CELL_BITS)
 CFLAGS += -DBF_CELL_SIGNED=$(CELL_SIGNED)
@@ -61,11 +61,11 @@ fast: $(TARGET)
 prof: CFLAGS = -Wall -Wextra -O3 -DNDEBUG -DBF_PROFILE=1 -DBF_CELL_BITS=$(CELL_BITS) -DBF_CELL_SIGNED=$(CELL_SIGNED) -DBF_OP_BUF_BITS=$(OP_BUF_BITS) -DBF_OFF_BITS=$(OFF_BITS)
 prof: $(TARGET)
 
-# Wide build for machine-generated programs that move the head
-# millions of cells at a time (DoomBF): 32-bit pointer deltas and
-# loop-move targets. Same speed on the benchmark corpus.
-wide: CFLAGS = -Wall -Wextra -O3 -DNDEBUG -DBF_CELL_BITS=$(CELL_BITS) -DBF_CELL_SIGNED=$(CELL_SIGNED) -DBF_OP_BUF_BITS=32 -DBF_OFF_BITS=32
-wide: $(TARGET)
+# Narrow IR: 16-bit pointer deltas and loop-move targets (12-byte ops
+# instead of 16). Ordinary programs run the same; programs that move
+# the head tens of thousands of cells at a time (DoomBF) run far slower.
+narrow: CFLAGS = -Wall -Wextra -O3 -DNDEBUG -DBF_CELL_BITS=$(CELL_BITS) -DBF_CELL_SIGNED=$(CELL_SIGNED) -DBF_OP_BUF_BITS=16 -DBF_OFF_BITS=16
+narrow: $(TARGET)
 
 # Reference interpreter (non-optimized IR, for comparison)
 ref: CFLAGS = -Wall -Wextra -O3 -DNDEBUG -D_refInterp=1 -DBF_CELL_BITS=$(CELL_BITS) -DBF_CELL_SIGNED=$(CELL_SIGNED) -DBF_OP_BUF_BITS=$(OP_BUF_BITS) -DBF_OFF_BITS=$(OFF_BITS)

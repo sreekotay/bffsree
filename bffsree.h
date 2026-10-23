@@ -48,9 +48,11 @@
   #error "Unsupported BF_CELL_BITS (use 8, 16, 32, or 64)"
 #endif
 
-// IR argument width for bf_op.buf (NOT a tape cell).
+// IR argument width for bf_op.buf (NOT a tape cell). It holds
+// move/multiply loop target offsets, so it bounds how far apart cells
+// can be for such a loop to collapse into one op.
 #ifndef BF_OP_BUF_BITS
-#define BF_OP_BUF_BITS 16
+#define BF_OP_BUF_BITS 32
 #endif
 
 #if BF_OP_BUF_BITS == 8
@@ -71,12 +73,13 @@
 #define BF_OP_BUF_MAX 2147483647
 #endif
 
-// Pointer-delta width for bf_op.off. 16 bits covers ordinary programs;
-// machine-generated ones (DoomBF moves the head 11M cells at a time)
-// need 32. Longer runs are split at load time, so a narrower field is
-// slower on such programs, never wrong.
+// Pointer-delta width for bf_op.off. Machine-generated programs
+// (DoomBF moves the head 11M cells at a time) need 32; 16 covers
+// ordinary ones. Longer runs are split at load time, so a narrower
+// field is slower on such programs, never wrong. With both fields at
+// 32 bits a bf_op is 16 bytes; at 16 bits it is 12.
 #ifndef BF_OFF_BITS
-#define BF_OFF_BITS 16
+#define BF_OFF_BITS 32
 #endif
 #if BF_OFF_BITS == 16
   typedef int16_t bf_off_t;
@@ -258,9 +261,14 @@ enum ebfo_CMD {
 typedef struct bf_op {
     uint8_t     cmd;
     uint8_t     sub;   // LOOPRUN: helper variant (BF_SEG_LOOPRUN*), decoded once
+#if BF_OP_BUF_BITS == 32
+    uint16_t    aux;   // first here so 32-bit buf/off pack into 16 bytes
+#endif
     bf_op_buf_t buf;   // IR argument: loop-inline delta OR target offset
     bf_off_t    off;   // pointer delta after op
+#if BF_OP_BUF_BITS != 32
     uint16_t    aux;   // 1-based affine map id (LOOPRUN) / nest id (NEST)
+#endif
     int32_t     val;   // jump distance, immediate value, multiplier
 } bf_op;
 
