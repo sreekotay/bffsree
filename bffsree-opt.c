@@ -11,12 +11,29 @@
 #define _bfe_vo(e,c,v,o)      do { (e).cmd=(uint8_t)(c); (e).sub=0; (e).aux=0; (e).val=(int32_t)(v); (e).off=(bf_off_t)(o); (e).buf=0; } while(0)
 #define _bfe_vob(e,c,v,o,b)   do { (e).cmd=(uint8_t)(c); (e).sub=0; (e).aux=0; (e).val=(int32_t)(v); (e).off=(bf_off_t)(o); (e).buf=(bf_op_buf_t)(b); } while(0)
 
-static int progscan(int* ptroff, char* chars, int pc, int proglen, int plusTok, int minusTok) {
-    int c, ci = 0;
-    while (pc + 1 < proglen && _myabs(ci) < 126) {
+// Token weights (bf_OptimizeRep): a token stands for rep[i] copies of
+// itself. A single token is at most the per-token cap; a scanned run
+// stops before its sum passes the run cap, which leaves room for the
+// caller to add one more token without overflowing bf_off_t / buf.
+#define BF_TOKW_VAL (BF_OP_BUF_MAX == 127 ? 1 : 127)
+#define BF_RUN_VAL  (BF_OP_BUF_MAX - BF_TOKW_VAL)
+#define BF_TOKW_PTR (BF_OFF_MAX / 4)
+#define BF_RUN_PTR  (BF_OFF_MAX / 2)
+
+int bf_run_cap_ptr(void) { return BF_TOKW_PTR; }
+int bf_run_cap_val(void) { return BF_TOKW_VAL; }
+
+static const int32_t* bf_tokw;
+
+static int bf_weight(int i) { return bf_tokw ? bf_tokw[i] : 1; }
+
+static int progscan(int* ptroff, char* chars, int pc, int proglen, int plusTok, int minusTok, int cap) {
+    int c, ci = 0, w;
+    while (pc + 1 < proglen) {
         c = (unsigned char)chars[pc + 1];
-        if (c == plusTok) ci++;
-        else if (c == minusTok) ci--;
+        w = bf_weight(pc + 1);
+        if (c == plusTok) { if (ci + w > cap) break; ci += w; }
+        else if (c == minusTok) { if (ci - w < -cap) break; ci -= w; }
         else break;
         pc++;
     }
@@ -24,8 +41,8 @@ static int progscan(int* ptroff, char* chars, int pc, int proglen, int plusTok, 
     return pc;
 }
 
-#define ptrcounter(p,c,pc,pl) progscan((p),(c),(pc),(pl),bf_GT,bf_LT)
-#define valcounter(p,c,pc,pl) progscan((p),(c),(pc),(pl),bf_PLUS,bf_MINUS)
+#define ptrcounter(p,c,pc,pl) progscan((p),(c),(pc),(pl),bf_GT,bf_LT,BF_RUN_PTR)
+#define valcounter(p,c,pc,pl) progscan((p),(c),(pc),(pl),bf_PLUS,bf_MINUS,BF_RUN_VAL)
 
 // =====================================================================
 // brainfuck - loop optimization (original version)
@@ -246,8 +263,8 @@ static int bf_foldNoops(bf_op* bfo, int pc) {
         // op; the fold target's accumulated off must fit bf_off_t.
         for (i = 0; i < pc; i++) {
             if (bfo[i].cmd == bfo_NOOP && last >= 0 &&
-                bfo[last].off + bfo[i].off >= -32768 &&
-                bfo[last].off + bfo[i].off <= 32767) {
+                (long)bfo[last].off + bfo[i].off >= BF_OFF_MIN &&
+                (long)bfo[last].off + bfo[i].off <= BF_OFF_MAX) {
                 del[i] = 1;
                 bfo[last].off = (bf_off_t)(bfo[last].off + bfo[i].off);
                 continue;
@@ -284,7 +301,7 @@ static int bf_fuseZeroFills(bf_op* bfo, int pc) {
         k = j - i + 1;
         if (k >= 2 && k <= 127) {
             int total = (k - 1) * dir + bfo[j].off;
-            if (total >= -32768 && total <= 32767) {
+            if (total >= BF_OFF_MIN && total <= BF_OFF_MAX) {
                 bfo[i].cmd = bfo_ZFILL;
                 bfo[i].buf = (bf_op_buf_t)(dir * k);
                 bfo[i].off = (bf_off_t)total;
@@ -884,6 +901,10 @@ static void bf_markNests(bf_op *bfo, int pc) {
 // Program optimization
 // ----------------------------
 int bf_Optimize(void** bfoptr, char* chars, int proglen, int printMetrics) {
+    return bf_OptimizeRep(bfoptr, chars, 0, proglen, printMetrics);
+}
+
+int bf_OptimizeRep(void** bfoptr, char* chars, const int32_t* rep, int proglen, int printMetrics) {
 #if BF_AFFINE
     bf_affine_reset();
 #endif
@@ -898,6 +919,7 @@ int bf_Optimize(void** bfoptr, char* chars, int proglen, int printMetrics) {
 
     if (!bfo) return -1;
     if (bfoptr) *bfoptr = 0;
+    bf_tokw = rep;
 
     while (rpc < proglen) {
         switch (c = (unsigned char)chars[rpc]) {
@@ -946,16 +968,18 @@ int bf_Optimize(void** bfoptr, char* chars, int proglen, int printMetrics) {
 
         case bf_GT:
         case bf_LT:
+            tc = rpc;
             rpc = ptrcounter(&off, chars, rpc, proglen);
-            off += (c == bf_GT) ? 1 : -1;
+            off += (c == bf_GT) ? bf_weight(tc) : -bf_weight(tc);
             _bfe_vo(bfo[pc], bfo_NOOP, 0, off);
             pc++;
             break;
 
         case bf_PLUS:
         case bf_MINUS:
+            tc = rpc;
             rpc = valcounter(&cci, chars, rpc, proglen);
-            cci += (c == bf_PLUS) ? 1 : -1;
+            cci += (c == bf_PLUS) ? bf_weight(tc) : -bf_weight(tc);
             rpc = ptrcounter(&off, chars, rpc, proglen);
             _bfe_vo(bfo[pc], (cci == 0) ? bfo_NOOP : bfo_VAL, cci, off);
             pc++;

@@ -63,7 +63,31 @@
   #error "Unsupported BF_OP_BUF_BITS (use 8, 16, or 32)"
 #endif
 
-typedef int16_t bf_off_t;
+#if BF_OP_BUF_BITS == 8
+#define BF_OP_BUF_MAX 127
+#elif BF_OP_BUF_BITS == 16
+#define BF_OP_BUF_MAX 32767
+#else
+#define BF_OP_BUF_MAX 2147483647
+#endif
+
+// Pointer-delta width for bf_op.off. 16 bits covers ordinary programs;
+// machine-generated ones (DoomBF moves the head 11M cells at a time)
+// need 32. Longer runs are split at load time, so a narrower field is
+// slower on such programs, never wrong.
+#ifndef BF_OFF_BITS
+#define BF_OFF_BITS 16
+#endif
+#if BF_OFF_BITS == 16
+  typedef int16_t bf_off_t;
+  #define BF_OFF_MAX 32767
+#elif BF_OFF_BITS == 32
+  typedef int32_t bf_off_t;
+  #define BF_OFF_MAX 2147483647
+#else
+  #error "Unsupported BF_OFF_BITS (use 16 or 32)"
+#endif
+#define BF_OFF_MIN (-BF_OFF_MAX - 1)
 
 // Reconstruct walking LOOPRUN bodies as affine maps over the cell ring
 // (new[i] = bias[i] + Σ c[i][j]*old[j]). ./bffsree -c prints the maps.
@@ -244,7 +268,7 @@ typedef struct bf_op {
 // the nest's header op so the runner needs only the header pointer.
 typedef struct bf_seg {
     uint8_t  kind;    /* BF_SEG_* */
-    int16_t  off;     /* PTRS: pointer delta after the scan */
+    bf_off_t off;     /* PTRS: pointer delta after the scan */
     int32_t  a, b;
     const struct bf_affine *aff;   /* AFF: bound map (resolved after compile) */
 } bf_seg;
@@ -392,6 +416,12 @@ void bffsree_ProfileReport(bf_VM* vm);
 #endif
 
 int  bf_Optimize(void** bfoptr, char* chars, int proglen, int printMetrics);
+// Same, with rep[i] = how many times token i repeats (NULL = all 1).
+// Each weight must fit the run caps: |w| <= bf_run_cap_ptr() for < >
+// and <= bf_run_cap_val() for + -; the loader splits longer runs.
+int  bf_OptimizeRep(void** bfoptr, char* chars, const int32_t* rep, int proglen, int printMetrics);
+int  bf_run_cap_ptr(void);
+int  bf_run_cap_val(void);
 
 #endif // _BF_SREE_H_
 

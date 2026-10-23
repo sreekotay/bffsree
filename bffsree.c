@@ -375,8 +375,8 @@ static BF_NOINLINE bf_cell* bf_looprun_generic(bf_cell* p, bf_op* P) {
 // Stride scan, four cells per iteration. The four loads are
 // independent, so the not-taken tests overlap; the scalar loop is
 // bound by one taken branch per cell. Reads up to three strides past
-// the first zero: strides are under 128 cells and the sentinel pads
-// are BF_TAPE_PAD, so that stays inside the allocation. Eight-way and
+// the first zero, which stays inside the BF_TAPE_PAD sentinel pads;
+// strides too long for that take the scalar loop. Eight-way and
 // a branchless zero-mask combine were both measured slower.
 //
 // Two entry points. Eval calls the out-of-line bf_apply_ptr_s so the
@@ -394,6 +394,10 @@ static BF_ALWAYS_INLINE bf_cell* bf_scan_stride(bf_cell* p, int stride) {
     if (stride == -3) return bf_word_scan3_backward(p);
 #endif
 #if BF_SCAN_UNROLL
+    if (stride > BF_TAPE_PAD / 4 || stride < -BF_TAPE_PAD / 4) {
+        while (*p) p += stride;
+        return p;
+    }
     // One induction variable: the exits record an offset and fall out
     // through a single return. Written as four `return p + k*stride`
     // exits, GCC keeps four pointers live across the loop (one add
