@@ -131,6 +131,8 @@ make CELL_SIGNED=1      # signed cells
 ./bffsree -m program.b     # show optimization metrics
 ./bffsree -c program.b     # dump optimized IR (readable)
 ./bffsree -j program.b     # dump optimized IR (JSON)
+./bffsree -t 64M prog.b    # tape size in cells (default 64K)
+./bffsree doom.bpk         # run-length input (.bpk suffix or -p)
 ```
 
 ### Profiling
@@ -153,6 +155,39 @@ make prof
 # //-- hottest loop sites: ...
 # //-- unconverted loops by direct dispatches (body ops + back-edges): ...
 ```
+
+### Run-length programs (.bpk) and DOOM
+
+`.bpk` is run-length Brainfuck: `+{3}` is `+++` (hex count); every other
+byte, including `!`, is a comment. Files ending in `.bpk` (or `-p`) load
+each run as one weighted token, so a program that expands to trillions of
+commands loads at its packed size. `-t N` sets the tape (`K`/`M`/`G`
+suffixes; `.bpk` defaults to 512M cells).
+
+[DoomBF](https://github.com/HighGhlow/DoomBF) is DOOM compiled to RISC-V
+and then to Brainfuck: a 353 MB `.bpk`, 3.7 trillion commands expanded,
+that walks the head up to 11M cells at a time. Build with `make wide`
+(32-bit pointer deltas and loop-move targets; same speed on the
+benchmark corpus) and pipe frames to DoomBF's `frnt`:
+
+```bash
+make wide
+./bffsree doom.bpk < .pipe | ./frnt > .pipe
+```
+
+Measured on a 4-core x86-64 cloud VM, 640x480 frames, byte-identical to
+DoomBF's own interpreter:
+
+| | load + optimize | first frame | per frame |
+|---|---:|---:|---:|
+| bffsree (`make wide`) | 5.7 s | 146 s | 22–26 s |
+| DoomBF `ibf`, no JIT | — | 344 s | 63–72 s |
+| DoomBF `ibf`, JIT (authors' figure) | — | — | ~40 s |
+
+The program optimizes from 111M tokens to 27M ops (540 MB of IR).
+Almost all of its time goes to moving bytes between cells a megabyte
+apart (`[->{100000}+<{100000}]`), which the far-offset loop tracking
+turns into single multiply-add ops.
 
 ### Input
 
