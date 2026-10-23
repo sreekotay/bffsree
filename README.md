@@ -190,7 +190,15 @@ DoomBF's own interpreter:
 |---|---:|---:|---:|
 | bffsree (default build) | 5.7 s | 146 s | 22–26 s |
 | DoomBF `ibf`, no JIT | — | 344 s | 63–72 s |
-| DoomBF `ibf`, JIT (authors' figure) | — | — | ~40 s |
+| DoomBF `ibf`, JIT (GNU lightning) | — | 173 s | 9–11 s |
+
+bffsree is 2.7x faster than `ibf`'s interpreter and 2.4x slower than its
+JIT, which compiles the program to native code (about 5 GB resident
+while it does). As shipped, the JIT build segfaults: its code for the
+`[->+<]`-style multiply op loads and stores the target cell even when
+the loop cell is zero, which a program walking near the start of the
+tape turns into an access below the allocation (`ibf`'s interpreter
+skips that write). Guarding the op with a zero test fixes it.
 
 The program optimizes from 111M tokens to 27M ops. Almost all of its
 time goes to moving bytes between cells a megabyte apart
