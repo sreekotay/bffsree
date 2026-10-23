@@ -61,7 +61,7 @@ def run_benchmark(name, bfile, input_data="", expected_output=None, expected_fil
                 [BFFSREE, bf_path],
                 input=input_data.encode() if input_data else None,
                 capture_output=True,
-                timeout=300
+                timeout=30
             )
             times.append(time.perf_counter() - t0)
             if rep == 0:
