@@ -757,7 +757,7 @@ static int bf_mv_addmul(bf_mv_expr *d, const bf_mv_expr *s, bf_cell m) {
 static int bf_moves_from_body(const bf_op *body, int n, int32_t *w) {
     bf_mv_expr e[BF_MOVES_MAX];
     int ldix[BF_MOVES_MAX];
-    int ne = 0, i, j, a, d, nw, n1 = 0, n0 = 0, ng = 0, nld = 0;
+    int ne = 0, i, j, a, d, nw;
     int64_t cur = 0;
     for (i = 0; i < n; i++) {
         const bf_op *o = body + i;
@@ -785,37 +785,51 @@ static int bf_moves_from_body(const bf_op *body, int n, int32_t *w) {
     }
     if (cur < -BF_OFF_MAX || cur > BF_OFF_MAX) return 0;
 
-    for (i = 0; i < ne; i++) ldix[i] = -1;
-    for (i = 0; i < ne; i++) {
-        if (e[i].nt == 1 && e[i].src[0] == i && e[i].k[0] == 1 && e[i].b == 0) {
-            e[i].nt = -1;  /* unchanged */
-            continue;
+    {
+        /* Sources sorted by offset, grouped into contiguous load runs; v
+         * index = position in that order, so contiguous unit stores map
+         * to contiguous v. */
+        int srcs[BF_MOVES_MAX], ns = 0, us[BF_MOVES_MAX], nu = 0, nlr = 0, nsr = 0, nfx = 0, ngs = 0;
+        int x, y;
+        for (i = 0; i < ne; i++) ldix[i] = -1;
+        for (i = 0; i < ne; i++) {
+            if (e[i].nt == 1 && e[i].src[0] == i && e[i].k[0] == 1 && e[i].b == 0) {
+                e[i].nt = -1;  /* unchanged */
+                continue;
+            }
+            for (j = 0; j < e[i].nt; j++)
+                if (ldix[e[i].src[j]] < 0) { ldix[e[i].src[j]] = 0; srcs[ns++] = e[i].src[j]; }
+            if (e[i].nt == 1 && e[i].k[0] == 1) us[nu++] = i;
+            else ngs++;
         }
-        for (j = 0; j < e[i].nt; j++)
-            if (ldix[e[i].src[j]] < 0) ldix[e[i].src[j]] = nld++;
-        if (e[i].nt == 1) n1++;
-        else if (e[i].nt == 0) n0++;
-        else ng++;
-    }
-    nw = 5;
-    for (i = 0; i < ne; i++) if (ldix[i] >= 0) w[nw + ldix[i]] = e[i].off;
-    nw += nld;
-    for (i = 0; i < ne; i++)
-        if (e[i].nt == 1) {
-            w[nw++] = e[i].off; w[nw++] = ldix[e[i].src[0]];
-            w[nw++] = (int32_t)e[i].k[0]; w[nw++] = (int32_t)e[i].b;
+        for (x = 1; x < ns; x++)
+            for (y = x; y > 0 && e[srcs[y - 1]].off > e[srcs[y]].off; y--) { int t = srcs[y]; srcs[y] = srcs[y - 1]; srcs[y - 1] = t; }
+        for (x = 1; x < nu; x++)
+            for (y = x; y > 0 && e[us[y - 1]].off > e[us[y]].off; y--) { int t = us[y]; us[y] = us[y - 1]; us[y - 1] = t; }
+        for (x = 0; x < ns; x++) ldix[srcs[x]] = x;
+
+        nw = 6;
+        for (x = 0; x < ns; x = y) {
+            for (y = x + 1; y < ns && e[srcs[y]].off == e[srcs[y - 1]].off + 1; y++) {}
+            w[nw++] = e[srcs[x]].off; w[nw++] = y - x; nlr++;
         }
-    for (i = 0; i < ne; i++)
-        if (e[i].nt == 0) { w[nw++] = e[i].off; w[nw++] = (int32_t)e[i].b; }
-    for (i = 0; i < ne; i++)
-        if (e[i].nt > 1) {
+        for (x = 0; x < nu; x = y) {
+            for (y = x + 1; y < nu && e[us[y]].off == e[us[y - 1]].off + 1 &&
+                            ldix[e[us[y]].src[0]] == ldix[e[us[y - 1]].src[0]] + 1; y++) {}
+            w[nw++] = e[us[x]].off; w[nw++] = ldix[e[us[x]].src[0]]; w[nw++] = y - x; nsr++;
+        }
+        for (x = 0; x < nu; x++)
+            if (e[us[x]].b) { w[nw++] = e[us[x]].off; w[nw++] = (int32_t)e[us[x]].b; nfx++; }
+        for (i = 0; i < ne; i++) {
+            if (e[i].nt < 0 || (e[i].nt == 1 && e[i].k[0] == 1)) continue;
             w[nw++] = e[i].off; w[nw++] = (int32_t)e[i].b; w[nw++] = e[i].nt;
             for (j = 0; j < e[i].nt; j++) {
                 w[nw++] = ldix[e[i].src[j]];
                 w[nw++] = (int32_t)e[i].k[j];
             }
         }
-    w[0] = (int32_t)cur; w[1] = nld; w[2] = n1; w[3] = n0; w[4] = ng;
+        w[0] = (int32_t)cur; w[1] = ns; w[2] = nlr; w[3] = nsr; w[4] = nfx; w[5] = ngs;
+    }
     return nw;
 }
 
@@ -827,8 +841,8 @@ static uint32_t bf_moves_hashw(const int32_t *w, int nw) {
 }
 
 static int bf_moves_len(const int32_t *w) {
-    int i, nw = 5 + w[1] + 4 * w[2] + 2 * w[3];
-    for (i = 0; i < w[4]; i++) nw += 3 + 2 * w[nw + 2];
+    int i, nw = 6 + 2 * w[2] + 3 * w[3] + 2 * w[4];
+    for (i = 0; i < w[5]; i++) nw += 3 + 2 * w[nw + 2];
     return nw;
 }
 
@@ -875,7 +889,7 @@ static uint32_t bf_moves_intern(const int32_t *w, int nw) {
 
 static void bf_markLoopRuns(bf_op* bfo, int pc) {
     int i, j, n, c, okb;
-    int32_t mv[5 + BF_MOVES_MAX * (5 + 2 * BF_MV_TERMS)];
+    int32_t mv[6 + BF_MOVES_MAX * (10 + 2 * BF_MV_TERMS)];
 #if BF_AFFINE
     bf_affine map;
 #endif

@@ -369,8 +369,10 @@ const char      *bf_affine_kind_name(int kind);
 // Long LOOPRUN body composed into gather form: changed cells are
 // bias + sum k*old[src] over loaded cells. Offsets are relative to the
 // pointer after the header's buf/off and are not span-limited. Entry
-// words: hop, nld, n1, n0, ng; ld[nld] offsets; n1 x (dst, src, k, b);
-// n0 x (dst, b); ng x (dst, b, nt, nt x (src, k)). The 32-bit id is
+// words: hop, nv, nlr, nsr, nfx, ng; then nlr load runs (off, len)
+// filling v[0..nv) in order; nsr unit store runs (dst, vi, len) with
+// p[dst+j] = v[vi+j]; nfx bias fixups (dst, b) added after the runs;
+// ng general stores (dst, b, nt, nt x (vi, k)). The 32-bit id is
 // split over the REW op's aux (low) and the first body op's aux (high).
 const int32_t *bf_moves_get(uint32_t id);
 

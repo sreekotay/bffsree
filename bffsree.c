@@ -587,28 +587,52 @@ static BF_NOINLINE bf_cell* bf_aff_walk_s3(
 }
 #endif
 
-// Gather-form body (layout at bf_moves_get): all loads, then all
-// stores, then the hop.
+// Exact copy of n cells between non-overlapping buffers, as fixed-width
+// chunks; the last chunk overlaps the previous one instead of running
+// past the end.
+static inline void bf_cellcopy(bf_cell* restrict d, const bf_cell* restrict s, int n) {
+    unsigned char* D = (unsigned char*)d;
+    const unsigned char* S = (const unsigned char*)s;
+    const int nb = n * (int)sizeof(bf_cell);
+    int i;
+    if (nb >= 16) {
+        for (i = 0; i + 16 < nb; i += 16) memcpy(D + i, S + i, 16);
+        memcpy(D + nb - 16, S + nb - 16, 16);
+    } else if (nb >= 8) {
+        memcpy(D, S, 8);
+        memcpy(D + nb - 8, S + nb - 8, 8);
+    } else if (nb >= 4) {
+        memcpy(D, S, 4);
+        memcpy(D + nb - 4, S + nb - 4, 4);
+    } else {
+        for (i = 0; i < nb; i++) D[i] = S[i];
+    }
+}
+
+// Gather-form body (layout at bf_moves_get): all loads into v, then
+// all stores from v, then the hop.
 static BF_NOINLINE bf_cell* bf_looprun_moves(
     bf_cell* p, bf_cell fbuf, int foff, const int32_t* restrict w)
 {
     bf_cell v[BF_MOVES_MAX];
-    const int hop = w[0], nld = w[1], n1 = w[2], n0 = w[3], ng = w[4];
-    const int32_t* restrict ld = w + 5;
-    const int32_t* restrict s1 = ld + nld;
-    const int32_t* restrict s0 = s1 + 4 * n1;
-    const int32_t* restrict sg = s0 + 2 * n0;
+    const int hop = w[0], nlr = w[2], nsr = w[3], nfx = w[4], ng = w[5];
+    const int32_t* restrict lr = w + 6;
+    const int32_t* restrict sr = lr + 2 * nlr;
+    const int32_t* restrict fx = sr + 3 * nsr;
+    const int32_t* restrict sg = fx + 2 * nfx;
     int i;
     *p += fbuf;
     p += foff;
     for (;;) {
         const int32_t* g = sg;
-        for (i = 0; i < nld; i++) v[i] = p[ld[i]];
-        for (i = 0; i < n1; i++) {
-            const int32_t* q = s1 + 4 * i;
-            p[q[0]] = (bf_cell)((bf_cell)q[3] + (bf_cell)q[2] * v[q[1]]);
+        bf_cell* vp = v;
+        for (i = 0; i < nlr; i++) {
+            bf_cellcopy(vp, p + lr[2 * i], lr[2 * i + 1]);
+            vp += lr[2 * i + 1];
         }
-        for (i = 0; i < n0; i++) p[s0[2 * i]] = (bf_cell)s0[2 * i + 1];
+        for (i = 0; i < nsr; i++)
+            bf_cellcopy(p + sr[3 * i], v + sr[3 * i + 1], sr[3 * i + 2]);
+        for (i = 0; i < nfx; i++) p[fx[2 * i]] += (bf_cell)fx[2 * i + 1];
         for (i = 0; i < ng; i++) {
             bf_cell x = (bf_cell)g[1];
             int t, nt = g[2];
