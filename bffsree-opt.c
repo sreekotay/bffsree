@@ -11,12 +11,29 @@
 #define _bfe_vo(e,c,v,o)      do { (e).cmd=(uint8_t)(c); (e).sub=0; (e).aux=0; (e).val=(int32_t)(v); (e).off=(bf_off_t)(o); (e).buf=0; } while(0)
 #define _bfe_vob(e,c,v,o,b)   do { (e).cmd=(uint8_t)(c); (e).sub=0; (e).aux=0; (e).val=(int32_t)(v); (e).off=(bf_off_t)(o); (e).buf=(bf_op_buf_t)(b); } while(0)
 
-static int progscan(int* ptroff, char* chars, int pc, int proglen, int plusTok, int minusTok) {
-    int c, ci = 0;
-    while (pc + 1 < proglen && _myabs(ci) < 126) {
+// Token weights (bf_OptimizeRep): a token stands for rep[i] copies of
+// itself. A single token is at most the per-token cap; a scanned run
+// stops before its sum passes the run cap, which leaves room for the
+// caller to add one more token without overflowing bf_off_t / buf.
+#define BF_TOKW_VAL (BF_OP_BUF_MAX == 127 ? 1 : 127)
+#define BF_RUN_VAL  (BF_OP_BUF_MAX - BF_TOKW_VAL)
+#define BF_TOKW_PTR (BF_OFF_MAX / 4)
+#define BF_RUN_PTR  (BF_OFF_MAX / 2)
+
+int bf_run_cap_ptr(void) { return BF_TOKW_PTR; }
+int bf_run_cap_val(void) { return BF_TOKW_VAL; }
+
+static const int32_t* bf_tokw;
+
+static int bf_weight(int i) { return bf_tokw ? bf_tokw[i] : 1; }
+
+static int progscan(int* ptroff, char* chars, int pc, int proglen, int plusTok, int minusTok, int cap) {
+    int c, ci = 0, w;
+    while (pc + 1 < proglen) {
         c = (unsigned char)chars[pc + 1];
-        if (c == plusTok) ci++;
-        else if (c == minusTok) ci--;
+        w = bf_weight(pc + 1);
+        if (c == plusTok) { if (ci + w > cap) break; ci += w; }
+        else if (c == minusTok) { if (ci - w < -cap) break; ci -= w; }
         else break;
         pc++;
     }
@@ -24,12 +41,39 @@ static int progscan(int* ptroff, char* chars, int pc, int proglen, int plusTok, 
     return pc;
 }
 
-#define ptrcounter(p,c,pc,pl) progscan((p),(c),(pc),(pl),bf_GT,bf_LT)
-#define valcounter(p,c,pc,pl) progscan((p),(c),(pc),(pl),bf_PLUS,bf_MINUS)
+#define ptrcounter(p,c,pc,pl) progscan((p),(c),(pc),(pl),bf_GT,bf_LT,BF_RUN_PTR)
+#define valcounter(p,c,pc,pl) progscan((p),(c),(pc),(pl),bf_PLUS,bf_MINUS,BF_RUN_VAL)
 
 // =====================================================================
 // brainfuck - loop optimization (original version)
 // =====================================================================
+// Per-offset flags for one loop body. Offsets within +-255 index a
+// window; farther ones (machine-generated code moves cells megabytes
+// apart) go in a short side table. Lookups past the table, or offsets
+// the op fields can't hold, fail and the loop stays unoptimized.
+#define BF_VT_NEAR 255
+#define BF_VT_FAR  32
+#define BF_VT_REACH (BF_OP_BUF_MAX < BF_OFF_MAX / 4 ? BF_OP_BUF_MAX : BF_OFF_MAX / 4)
+
+typedef struct bf_vtrack {
+    char near[2 * BF_VT_NEAR + 1];
+    int  far_off[BF_VT_FAR];
+    char far_flag[BF_VT_FAR];
+    int  nfar;
+} bf_vtrack;
+
+static char* bf_vt(bf_vtrack* t, long i) {
+    int k;
+    if (i >= -BF_VT_NEAR && i <= BF_VT_NEAR) return &t->near[i + BF_VT_NEAR];
+    if (i < -(long)BF_VT_REACH || i > (long)BF_VT_REACH) return 0;
+    for (k = 0; k < t->nfar; k++)
+        if (t->far_off[k] == (int)i) return &t->far_flag[k];
+    if (t->nfar >= BF_VT_FAR) return 0;
+    t->far_off[t->nfar] = (int)i;
+    t->far_flag[t->nfar] = 0;
+    return &t->far_flag[t->nfar++];
+}
+
 static int optimizeLoop(bf_op* bfo, int s) {
     int pc = s;
     int canopt = 1;
@@ -37,8 +81,8 @@ static int optimizeLoop(bf_op* bfo, int s) {
     int skip, rc, sp, nsp, haszero = 0;
     enum ebfo_CMD cmd;
     bf_op *opptr, opstack[128];
-    char vtrackspace[512] = {0};
-    char *vtrack = vtrackspace + 256;
+    bf_vtrack vt;
+    char *a, *b;
 
     // ============================
     // Can we optimize this loop?
@@ -46,40 +90,42 @@ static int optimizeLoop(bf_op* bfo, int s) {
     if (bfo[pc].cmd != bfo_FWD) {
         return -1;
     }
+    memset(vt.near, 0, sizeof(vt.near));
+    vt.nfar = 0;
     lc = bfo[pc].buf;
     sp = bfo[pc].off;
     pc++;
 
     // read = 1, modify = 2, set = 4
     #define _loop_var(a) (((a) & 7) > 2)  // once modified, we can't read safely
-    #define _vt_bad(i)   ((i) < -255 || (i) > 255)  // outside vtrack window
+    #define vtrack(i)    (*bf_vt(&vt, (i)))  // only after a successful bf_vt
     while (canopt && (cmd = (enum ebfo_CMD)bfo[pc].cmd) != bfo_REW) {
-        if (_vt_bad(sp)) { canopt = 0; break; }
+        if (!(a = bf_vt(&vt, sp))) { canopt = 0; break; }
         switch (cmd) {
         case bfo_VAL:
             if (sp == 0) lc += bfo[pc].val;
-            else vtrack[sp] |= 2 | 1;
+            else *a |= 2 | 1;
             break;
 
         case bfo_VAL_MUL:
-            if (_vt_bad(sp + bfo[pc].buf)) { canopt = 0; break; }
-            if (_loop_var(vtrack[sp])) canopt = 0;
-            if (_loop_var(vtrack[sp + bfo[pc].buf])) canopt = 0;
-            vtrack[sp + bfo[pc].buf] |= 2 | 1;
-            vtrack[sp] |= 1;
+            if (!(b = bf_vt(&vt, (long)sp + bfo[pc].buf))) { canopt = 0; break; }
+            if (_loop_var(*a)) canopt = 0;
+            if (_loop_var(*b)) canopt = 0;
+            *b |= 2 | 1;
+            *a |= 1;
             if (sp == 0) canopt = 0;
             break;
 
         case bfo_VAL_MZ:
-            if (_vt_bad(sp + bfo[pc].buf)) { canopt = 0; break; }
-            if (_loop_var(vtrack[sp + bfo[pc].buf])) canopt = 0;
+            if (!(b = bf_vt(&vt, (long)sp + bfo[pc].buf))) { canopt = 0; break; }
+            if (_loop_var(*b)) canopt = 0;
             // fall through
 
         case bfo_VAL_ZERO:
-            vtrack[sp] |= 4;
+            *a |= 4;
             if (cmd == bfo_VAL_MZ) {
-                vtrack[sp] |= 1;
-                vtrack[sp + bfo[pc].buf] |= 2 | 1;
+                *a |= 1;
+                *b |= 2 | 1;
             }
             if (sp == 0 || sp + bfo[pc].buf == 0) canopt = 0;
             if (sp == 0) lc = 0;
@@ -102,7 +148,7 @@ static int optimizeLoop(bf_op* bfo, int s) {
     }
 
     // has to be a simple loop -- balanced and dec by 1
-    if (canopt == 0 || sp != 0 || lc != -1 || (vtrack[0] & 2) == 2)
+    if (canopt == 0 || sp != 0 || lc != -1 || (vtrack(0) & 2) == 2)
         return -1;
 
     // ============================
@@ -138,7 +184,7 @@ static int optimizeLoop(bf_op* bfo, int s) {
             nsp = sp;
             sp += bfo[pc].off;
             _bfe_vob(bfo[pc], bfo_VAL_MUL, bfo[pc].val, 0, nsp);
-            vtrack[nsp] |= 8;
+            vtrack(nsp) |= 8;
             break;
 
         case bfo_VAL_MUL:
@@ -146,12 +192,12 @@ static int optimizeLoop(bf_op* bfo, int s) {
             nsp = sp;
             sp += bfo[pc].off + nsp;
             bfo[pc + 1] = bfo[pc];
-            if (vtrack[nsp] & 8) {
+            if (vtrack(nsp) & 8) {
                 _bfe_vob(bfo[pc], bfo_NOOP, 0, nsp, 0);
-                vtrack[nsp] |= 16;
+                vtrack(nsp) |= 16;
             } else {
                 _bfe_vob(bfo[pc], bfo_MUL_MUL, 1, nsp, nsp);
-                vtrack[nsp] |= 16 | 8;
+                vtrack(nsp) |= 16 | 8;
             }
             pc++;
             bfo[pc].off = (bf_off_t)(-nsp);
@@ -163,7 +209,7 @@ static int optimizeLoop(bf_op* bfo, int s) {
             sp += bfo[pc].off + nsp;
             bfo[pc + 1] = bfo[pc];
             _bfe_vob(bfo[pc], bfo_NOOP, 0, nsp, 0);
-            vtrack[nsp] |= 16;
+            vtrack(nsp) |= 16;
             pc++;
             bfo[pc].off = (bf_off_t)(-nsp);
             break;
@@ -208,7 +254,7 @@ static int optimizeLoop(bf_op* bfo, int s) {
     if (opptr != opstack) free(opptr);
     return pc;
     #undef _loop_var
-    #undef _vt_bad
+    #undef vtrack
 }
 
 // ----------------------------
@@ -246,8 +292,8 @@ static int bf_foldNoops(bf_op* bfo, int pc) {
         // op; the fold target's accumulated off must fit bf_off_t.
         for (i = 0; i < pc; i++) {
             if (bfo[i].cmd == bfo_NOOP && last >= 0 &&
-                bfo[last].off + bfo[i].off >= -32768 &&
-                bfo[last].off + bfo[i].off <= 32767) {
+                (long)bfo[last].off + bfo[i].off >= BF_OFF_MIN &&
+                (long)bfo[last].off + bfo[i].off <= BF_OFF_MAX) {
                 del[i] = 1;
                 bfo[last].off = (bf_off_t)(bfo[last].off + bfo[i].off);
                 continue;
@@ -284,7 +330,7 @@ static int bf_fuseZeroFills(bf_op* bfo, int pc) {
         k = j - i + 1;
         if (k >= 2 && k <= 127) {
             int total = (k - 1) * dir + bfo[j].off;
-            if (total >= -32768 && total <= 32767) {
+            if (total >= BF_OFF_MIN && total <= BF_OFF_MAX) {
                 bfo[i].cmd = bfo_ZFILL;
                 bfo[i].buf = (bf_op_buf_t)(dir * k);
                 bfo[i].off = (bf_off_t)total;
@@ -884,6 +930,10 @@ static void bf_markNests(bf_op *bfo, int pc) {
 // Program optimization
 // ----------------------------
 int bf_Optimize(void** bfoptr, char* chars, int proglen, int printMetrics) {
+    return bf_OptimizeRep(bfoptr, chars, 0, proglen, printMetrics);
+}
+
+int bf_OptimizeRep(void** bfoptr, char* chars, const int32_t* rep, int proglen, int printMetrics) {
 #if BF_AFFINE
     bf_affine_reset();
 #endif
@@ -898,6 +948,7 @@ int bf_Optimize(void** bfoptr, char* chars, int proglen, int printMetrics) {
 
     if (!bfo) return -1;
     if (bfoptr) *bfoptr = 0;
+    bf_tokw = rep;
 
     while (rpc < proglen) {
         switch (c = (unsigned char)chars[rpc]) {
@@ -946,16 +997,18 @@ int bf_Optimize(void** bfoptr, char* chars, int proglen, int printMetrics) {
 
         case bf_GT:
         case bf_LT:
+            tc = rpc;
             rpc = ptrcounter(&off, chars, rpc, proglen);
-            off += (c == bf_GT) ? 1 : -1;
+            off += (c == bf_GT) ? bf_weight(tc) : -bf_weight(tc);
             _bfe_vo(bfo[pc], bfo_NOOP, 0, off);
             pc++;
             break;
 
         case bf_PLUS:
         case bf_MINUS:
+            tc = rpc;
             rpc = valcounter(&cci, chars, rpc, proglen);
-            cci += (c == bf_PLUS) ? 1 : -1;
+            cci += (c == bf_PLUS) ? bf_weight(tc) : -bf_weight(tc);
             rpc = ptrcounter(&off, chars, rpc, proglen);
             _bfe_vo(bfo[pc], (cci == 0) ? bfo_NOOP : bfo_VAL, cci, off);
             pc++;

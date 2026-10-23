@@ -61,11 +61,21 @@ line-aligned from source. Before the layout work (see *Code layout*
 below) the GCC total was 9.898 against Clang's 9.115, with `long` 48%
 and `factor` 13% slower under GCC from identical source.
 
+The IR now defaults to 32-bit pointer deltas and loop-move targets
+(16-byte ops, up from 12) so that programs like DoomBF, which move the
+head millions of cells at a time, collapse their loops. Measured
+against the 16-bit IR (`make narrow`) in one interleaved session, the
+eight-workload totals are unchanged: GCC +0.0% default / +0.2% fast,
+Clang −0.5% / −1.6%. `factor` is 2–10% faster wide; the one loss is
+Clang's checked build on `long` (+20%, 7 ms) with fewer instructions and
+the same simulated mispredicts — dispatch layout, not work.
+
 ## Features
 
 - **Optimizing IR**:
   - Run-length encoding for consecutive `+`, `-`, `<`, `>`
-  - Loop collapse (`[-]` → zero, `[->+<]` → multiply-add, chained copies → `MUL_MUL`)
+  - Loop collapse (`[-]` → zero, `[->+<]` → multiply-add, chained copies → `MUL_MUL`),
+    at any cell distance (32-bit offsets in the IR)
   - Scan loops (`[>]`, `[<<]`) → single strided scan op
   - 9-cell tape frames: lane slides to offset 9 and +9 copy/mul walks
     keep the current frame in registers, then hop a whole record
@@ -100,6 +110,8 @@ and `factor` 13% slower under GCC from identical source.
   permanently-zero sentinel pads so the `fast` build can skip per-op checks
   without leaving the allocation
 - **Built-in profiler**: dynamic op histogram and hottest loop sites (`make prof`)
+- **Run-length input**: `.bpk` files (`+{3}` = `+++`) load at their packed
+  size — enough to run DOOM ([DOOM.md](DOOM.md))
 - **Configurable cell size**: 8, 16, 32, or 64-bit, signed or unsigned
 - **Single-header style**: easy to embed
 - **Cross-platform**: Linux, macOS, Windows
@@ -113,6 +125,7 @@ make            # default: O3, fully bounds-checked
 make fast       # benchmark build: unchecked dispatch (sentinel-pad safe), -march=native
 make prof       # profiling build: op histogram + hottest loops on stderr
 make ref        # reference interpreter (no optimization), for comparison
+make narrow     # 16-bit offsets in the IR (12-byte ops instead of 16)
 make debug      # -O0 -g
 make clean
 ```
@@ -131,6 +144,8 @@ make CELL_SIGNED=1      # signed cells
 ./bffsree -m program.b     # show optimization metrics
 ./bffsree -c program.b     # dump optimized IR (readable)
 ./bffsree -j program.b     # dump optimized IR (JSON)
+./bffsree -t 64M prog.b    # tape size in cells (default 64K)
+./bffsree doom.bpk         # run-length input (.bpk suffix or -p)
 ```
 
 ### Profiling
@@ -153,6 +168,34 @@ make prof
 # //-- hottest loop sites: ...
 # //-- unconverted loops by direct dispatches (body ops + back-edges): ...
 ```
+
+### Run-length programs (.bpk) and DOOM
+
+`.bpk` is run-length Brainfuck: `+{3}` is `+++` (hex count); every other
+byte, including `!`, is a comment. Files ending in `.bpk` (or `-p`) load
+each run as one weighted token, so a program that expands to trillions of
+commands loads at its packed size. `-t N` sets the tape (`K`/`M`/`G`
+suffixes; `.bpk` defaults to 512M cells).
+
+[DoomBF](https://github.com/HighGhlow/DoomBF) is DOOM compiled to RISC-V
+and then to Brainfuck: a 353 MB `.bpk`, 3.7 trillion commands expanded,
+that walks the head up to 11M cells at a time. The default build runs
+it; **[DOOM.md](DOOM.md)** has the download, the interactive frontend
+setup, and headless frame capture.
+
+Measured on a 4-core x86-64 cloud VM, 640x480 frames, byte-identical to
+DoomBF's own interpreter:
+
+| | load + optimize | first frame | per frame |
+|---|---:|---:|---:|
+| bffsree (default build) | 5.7 s | 146 s | 22–26 s |
+| DoomBF `ibf`, no JIT | — | 344 s | 63–72 s |
+| DoomBF `ibf`, JIT (authors' figure) | — | — | ~40 s |
+
+The program optimizes from 111M tokens to 27M ops. Almost all of its
+time goes to moving bytes between cells a megabyte apart
+(`[->{100000}+<{100000}]`), which loop collapse turns into single
+multiply-add ops at any distance.
 
 ### Input
 

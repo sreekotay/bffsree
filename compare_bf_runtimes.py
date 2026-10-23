@@ -101,6 +101,8 @@ def configured_runtimes() -> tuple[Runtime, ...]:
         Runtime(
             "bffsree-fast-word64", (str(BUILD_DIR / f"bffsree-fast-word64{suffix}"),)
         ),
+        Runtime("bffsree-checked-narrow", (str(BUILD_DIR / f"bffsree-checked-narrow{suffix}"),)),
+        Runtime("bffsree-fast-narrow", (str(BUILD_DIR / f"bffsree-fast-narrow{suffix}"),)),
         Runtime("bffsree-reference", (str(BUILD_DIR / f"bffsree-reference{suffix}"),)),
         Runtime(
             "bf-cpp",
@@ -159,7 +161,6 @@ def build_bffsree() -> dict[str, list[str]]:
         "-DNDEBUG",
         "-DBF_CELL_BITS=8",
         "-DBF_CELL_SIGNED=0",
-        "-DBF_OP_BUF_BITS=16",
     ]
     commands = {
         "bffsree-checked": common
@@ -169,6 +170,23 @@ def build_bffsree() -> dict[str, list[str]]:
             "-DBF_FAST=1",
             "-o",
             str(BUILD_DIR / "bffsree-fast-word64"),
+            str(ROOT / "main.c"),
+        ],
+        "bffsree-checked-narrow": common
+        + [
+            "-DBF_OP_BUF_BITS=16",
+            "-DBF_OFF_BITS=16",
+            "-o",
+            str(BUILD_DIR / "bffsree-checked-narrow"),
+            str(ROOT / "main.c"),
+        ],
+        "bffsree-fast-narrow": common
+        + [
+            "-DBF_FAST=1",
+            "-DBF_OP_BUF_BITS=16",
+            "-DBF_OFF_BITS=16",
+            "-o",
+            str(BUILD_DIR / "bffsree-fast-narrow"),
             str(ROOT / "main.c"),
         ],
         "bffsree-reference": common
