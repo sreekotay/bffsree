@@ -1,0 +1,63 @@
+fun u8(value) {
+    return value & 0xFF;
+}
+
+fun smul(a, b) {
+    let var sign = 0;
+    let var ma = a;
+    if (a >= 128) {
+        ma = u8(-a);
+        sign = sign + 1;
+    }
+    let var mb = b;
+    if (b >= 128) {
+        mb = u8(-b);
+        sign = sign + 1;
+    }
+    let ah = (ma / 16).floor();
+    let al = ma % 16;
+    let bh = (mb / 16).floor();
+    let bl = mb % 16;
+    let result = u8(ah * bh * 16 + ah * bl + al * bh + (al * bl / 16).floor());
+    return sign == 1 ? u8(-result) : result;
+}
+
+fun mandel(cr, ci) {
+    let var zr = 0;
+    let var zi = 0;
+    let var iterations = 0;
+    loop {
+        let azr = zr >= 128 ? u8(-zr) : zr;
+        let azi = zi >= 128 ? u8(-zi) : zi;
+        if (azr > 32 || azi > 32) {
+            return iterations;
+        }
+        let zr2 = smul(zr, zr);
+        let zi2 = smul(zi, zi);
+        let zri = smul(zr, zi);
+        zr = u8(zr2 - zi2 + cr);
+        zi = u8(zri + zri + ci);
+        iterations = iterations + 1;
+        if (iterations >= 20) {
+            return iterations;
+        }
+    }
+}
+
+let var ci = 236;
+while (ci != 21) {
+    let var line = "";
+    let var cr = 216;
+    while (cr != 25) {
+        let n = mandel(cr, ci);
+        let pixel = n >= 20 ? "#" :
+            n >= 12 ? "%" :
+            n >= 8 ? "+" :
+            n >= 5 ? ":" :
+            n >= 3 ? "." : " ";
+        line = line + pixel;
+        cr = u8(cr + 1);
+    }
+    $println(line);
+    ci = u8(ci + 1);
+}
