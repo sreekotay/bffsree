@@ -143,6 +143,8 @@ enum {
 #define BF_NEST_AFF 1
 #endif
 #define BF_NEST_MAX_SEG 16
+// Most cells a BF_SEG_LOOPRUN_MOVES body may touch.
+#define BF_MOVES_MAX 64
 
 enum {
     BF_SEG_AFF = 1,   /* affine block, straight-line by kind */
@@ -158,6 +160,7 @@ enum {
     BF_SEG_LOOPRUN_AFF_S2Z,
     BF_SEG_LOOPRUN_AFF_S2,
     BF_SEG_LOOPRUN_AFF_S3,
+    BF_SEG_LOOPRUN_MOVES,    /* body of only VAL_MZ / VAL ops */
     BF_SEG_NEST,      /* child nest at header+a */
     BF_SEG_FWD,       /* nested loop the compiler could not nest */
     BF_SEG_Total
@@ -362,6 +365,18 @@ int              bf_affine_pack(bf_affine *m);
 int              bf_affine_format(const bf_affine *m, char *buf, int buflen);
 const char      *bf_affine_kind_name(int kind);
 #endif
+
+// Long LOOPRUN body composed into gather form: changed cells are
+// bias + sum k*old[src] over loaded cells. Offsets are relative to the
+// pointer after the header's buf/off and are not span-limited. Entry
+// words: hop, nld, n1, n0, ng; ld[nld] offsets; n1 x (dst, src, k, b);
+// n0 x (dst, b); ng x (dst, b, nt, nt x (src, k)). The 32-bit id is
+// split over the REW op's aux (low) and the first body op's aux (high).
+const int32_t *bf_moves_get(uint32_t id);
+
+static inline uint32_t bf_moves_id(const bf_op *L) {
+    return L[L->val].aux | ((uint32_t)L[1].aux << 16);
+}
 
 // -----------------------------
 // Helpers/macros

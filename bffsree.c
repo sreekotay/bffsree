@@ -195,6 +195,8 @@ int bf_looprun_variant(const bf_op* L) {
         }
     }
 #endif
+    if (bf_moves_get(bf_moves_id(L)))
+        return BF_SEG_LOOPRUN_MOVES;
     return BF_SEG_LOOPRUN;
 }
 
@@ -585,6 +587,44 @@ static BF_NOINLINE bf_cell* bf_aff_walk_s3(
 }
 #endif
 
+// Gather-form body (layout at bf_moves_get): all loads, then all
+// stores, then the hop.
+static BF_NOINLINE bf_cell* bf_looprun_moves(
+    bf_cell* p, bf_cell fbuf, int foff, const int32_t* restrict w)
+{
+    bf_cell v[BF_MOVES_MAX];
+    const int hop = w[0], nld = w[1], n1 = w[2], n0 = w[3], ng = w[4];
+    const int32_t* restrict ld = w + 5;
+    const int32_t* restrict s1 = ld + nld;
+    const int32_t* restrict s0 = s1 + 4 * n1;
+    const int32_t* restrict sg = s0 + 2 * n0;
+    int i;
+    *p += fbuf;
+    p += foff;
+    for (;;) {
+        const int32_t* g = sg;
+        for (i = 0; i < nld; i++) v[i] = p[ld[i]];
+        for (i = 0; i < n1; i++) {
+            const int32_t* q = s1 + 4 * i;
+            p[q[0]] = (bf_cell)((bf_cell)q[3] + (bf_cell)q[2] * v[q[1]]);
+        }
+        for (i = 0; i < n0; i++) p[s0[2 * i]] = (bf_cell)s0[2 * i + 1];
+        for (i = 0; i < ng; i++) {
+            bf_cell x = (bf_cell)g[1];
+            int t, nt = g[2];
+            for (t = 0; t < nt; t++)
+                x = (bf_cell)(x + (bf_cell)g[4 + 2 * t] * v[g[3 + 2 * t]]);
+            p[g[0]] = x;
+            g += 3 + 2 * nt;
+        }
+        p += hop;
+        if (*p == 0) break;
+        *p += fbuf;
+        p += foff;
+    }
+    return p;
+}
+
 // Run a LOOPRUN whose cell is known nonzero, by pre-decoded variant.
 // Stops at the failed loop test; the caller applies the REW slot.
 static inline bf_cell* bf_looprun_taken(bf_cell* p, bf_op* L, int variant) {
@@ -604,6 +644,8 @@ static inline bf_cell* bf_looprun_taken(bf_cell* p, bf_op* L, int variant) {
             L[2].val, L[2].buf, L[2].off,
             L[3].val, L[3].buf, L[3].off,
             L[4].val, L[4].buf, L[4].off);
+    case BF_SEG_LOOPRUN_MOVES:
+        return bf_looprun_moves(p, (bf_cell)L->buf, L->off, bf_moves_get(bf_moves_id(L)));
 #if BF_AFFINE && BF_AFFINE_APPLY
     case BF_SEG_LOOPRUN_AFF_S1:
         return bf_aff_walk_s1(p, (bf_cell)L->buf, L->off, &bf_affine_get(L->aux)->bound);
@@ -741,6 +783,7 @@ static inline bf_cell* bf_nest_seg(bf_cell* p, bf_op* L, const bf_seg* g) {
     case BF_SEG_LOOPRUN_AFF_S2Z:
     case BF_SEG_LOOPRUN_AFF_S2:
     case BF_SEG_LOOPRUN_AFF_S3:
+    case BF_SEG_LOOPRUN_MOVES:
         C = L + g->a;
         if (*p) p = bf_looprun_taken(p, C, g->kind);
         return bf_apply_rew(p, C + C->val);
