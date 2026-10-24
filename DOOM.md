@@ -6,8 +6,8 @@ run-length-compressed Brainfuck file that expands to about 3.7 trillion
 commands. bffsree loads it in its packed form and runs it with no JIT.
 
 On a 4-core x86-64 cloud VM it takes about 6 s to load and optimize,
-shows the first frame after about 2.5 minutes, and then renders one
-frame every 22–26 s. Frames are byte-identical to DoomBF's own `ibf`
+shows the first frame after about 1 3/4 minutes, and then renders one
+frame every 12–15 s. Frames are byte-identical to DoomBF's own `ibf`
 interpreter.
 
 ## 1. Get the program
@@ -122,3 +122,10 @@ optimizer used to recognize such move/multiply loops only when every
 cell was within 255 of the loop cell, so these ran up to 255 iterations
 each, and DOOM stalled for over 15 minutes during texture setup. Far
 offsets are now tracked too, and each loop becomes one multiply-add op.
+
+Each pixel then walks a 15-cell record across 255 planes a megabyte
+apart and back, through loops of 36-49 move ops. bffsree composes each
+such body once, at optimize time, into the cells it reads and the cells
+it writes (bias plus a sum of read cells), groups both into contiguous
+runs, and runs an iteration as a few block copies with no op dispatch.
+That took frames from 22-26 s to 12-15 s.

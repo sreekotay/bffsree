@@ -94,6 +94,7 @@ void bffsree_Print(bf_VM* vm, char* inp, int lang) {
                         case BF_SEG_LOOPRUN_AFF_S2Z:
                         case BF_SEG_LOOPRUN_AFF_S2:
                         case BF_SEG_LOOPRUN_AFF_S3:
+                        case BF_SEG_LOOPRUN_MOVES:
                             printf(" looprun@%d", i + g->a); break;
                         case BF_SEG_NEST:    printf(" nest@%d", i + g->a); break;
                         case BF_SEG_FWD:     printf(" fwd@%d", i + g->a); break;

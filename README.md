@@ -188,14 +188,28 @@ DoomBF's own interpreter:
 
 | | load + optimize | first frame | per frame |
 |---|---:|---:|---:|
-| bffsree (default build) | 5.7 s | 146 s | 22–26 s |
+| bffsree (default build) | 5.7 s | 105 s | 12–15 s |
 | DoomBF `ibf`, no JIT | — | 344 s | 63–72 s |
-| DoomBF `ibf`, JIT (authors' figure) | — | — | ~40 s |
+| DoomBF `ibf`, JIT (GNU lightning) | — | 173 s | 9–11 s |
+
+bffsree is about 5x faster than `ibf`'s interpreter and about 1.4x
+slower than its JIT, which compiles the program to native code (about 5 GB resident
+while it does). As shipped, the JIT build segfaults: its code for the
+`[->+<]`-style multiply op loads and stores the target cell even when
+the loop cell is zero, which a program walking near the start of the
+tape turns into an access below the allocation (`ibf`'s interpreter
+skips that write). Guarding the op with a zero test fixes it.
 
 The program optimizes from 111M tokens to 27M ops. Almost all of its
 time goes to moving bytes between cells a megabyte apart
 (`[->{100000}+<{100000}]`), which loop collapse turns into single
-multiply-add ops at any distance.
+multiply-add ops at any distance. What remains per pixel is a walk
+across 255 megabyte-spaced planes that swaps a 15-cell record at each
+step; those loop bodies (36-49 moves each) are composed at optimize
+time into block copies (`BF_SEG_LOOPRUN_MOVES`), which took frames from
+22-26 s to 12-15 s. Every step of that walk lands in the same cache set,
+so it is near its floor; the rest of the gap to the JIT is dispatch
+spread over some 26,000 hot loops.
 
 ### Input
 

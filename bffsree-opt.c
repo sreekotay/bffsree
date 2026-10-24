@@ -688,8 +688,208 @@ int bf_affine_format(const bf_affine *m, char *buf, int buflen) {
 // Nested scans/walks stay as separate ops: a generic nest interpreter
 // was slower than dispatching the specialized helpers from Eval.
 // ----------------------------
+// ----------------------------
+// Gather form for long move-chain LOOPRUN bodies (DOOM's record
+// shuffles: dozens of VAL_MZ ops whose offsets can span megabytes, too
+// wide for the affine map and too many for its 16-bit id pool). Each
+// cell's final value is tracked as bias + sum k*old[src] over at most
+// BF_MV_TERMS cells. Entries are deduplicated in one flat pool; the
+// layout is documented at bf_moves_get.
+// ----------------------------
+#define BF_MOVES_MIN_OPS 7
+#define BF_MV_TERMS 8
+
+static int32_t  *bf_moves_pool;
+static uint32_t  bf_moves_npool, bf_moves_cap, bf_moves_nent;
+static uint32_t *bf_moves_hash;
+static uint32_t  bf_moves_hcap;
+
+const int32_t *bf_moves_get(uint32_t id) {
+    if (id == 0 || id > bf_moves_npool) return 0;
+    return bf_moves_pool + (id - 1);
+}
+
+static void bf_moves_reset(void) {
+    free(bf_moves_pool);
+    free(bf_moves_hash);
+    bf_moves_pool = 0;
+    bf_moves_hash = 0;
+    bf_moves_npool = bf_moves_cap = bf_moves_nent = bf_moves_hcap = 0;
+}
+
+typedef struct {
+    int32_t off;
+    int     nt;
+    int     src[BF_MV_TERMS];
+    bf_cell k[BF_MV_TERMS], b;
+} bf_mv_expr;
+
+static int bf_mv_cell(bf_mv_expr *e, int *ne, int32_t off) {
+    int i;
+    for (i = 0; i < *ne; i++) if (e[i].off == off) return i;
+    if (*ne >= BF_MOVES_MAX) return -1;
+    e[i].off = off; e[i].nt = 1; e[i].src[0] = i; e[i].k[0] = 1; e[i].b = 0;
+    (*ne)++;
+    return i;
+}
+
+// d += m * s
+static int bf_mv_addmul(bf_mv_expr *d, const bf_mv_expr *s, bf_cell m) {
+    int i, j;
+    d->b = (bf_cell)(d->b + m * s->b);
+    for (i = 0; i < s->nt; i++) {
+        bf_cell k = (bf_cell)(m * s->k[i]);
+        for (j = 0; j < d->nt && d->src[j] != s->src[i]; j++) {}
+        if (j == d->nt) {
+            if (d->nt >= BF_MV_TERMS) return 0;
+            d->src[j] = s->src[i];
+            d->k[j] = 0;
+            d->nt++;
+        }
+        d->k[j] = (bf_cell)(d->k[j] + k);
+    }
+    for (i = j = 0; i < d->nt; i++)
+        if (d->k[i]) { d->src[j] = d->src[i]; d->k[j] = d->k[i]; j++; }
+    d->nt = j;
+    return 1;
+}
+
+static int bf_moves_from_body(const bf_op *body, int n, int32_t *w) {
+    bf_mv_expr e[BF_MOVES_MAX];
+    int ldix[BF_MOVES_MAX];
+    int ne = 0, i, j, a, d, nw;
+    int64_t cur = 0;
+    for (i = 0; i < n; i++) {
+        const bf_op *o = body + i;
+        bf_mv_expr s;
+        if (cur < -BF_OFF_MAX || cur > BF_OFF_MAX) return 0;
+        if ((a = bf_mv_cell(e, &ne, (int32_t)cur)) < 0) return 0;
+        switch (o->cmd) {
+        case bfo_VAL:
+            e[a].b = (bf_cell)(e[a].b + o->val);
+            break;
+        case bfo_VAL_ZERO:
+            e[a].nt = 0; e[a].b = (bf_cell)o->val;
+            break;
+        case bfo_VAL_MZ:
+        case bfo_VAL_MUL:
+            if ((d = bf_mv_cell(e, &ne, (int32_t)(cur + o->buf))) < 0) return 0;
+            s = e[a];
+            if (!bf_mv_addmul(&e[d], &s, (bf_cell)o->val)) return 0;
+            if (o->cmd == bfo_VAL_MZ) { e[a].nt = 0; e[a].b = 0; }
+            break;
+        default:
+            return 0;
+        }
+        cur += o->off;
+    }
+    if (cur < -BF_OFF_MAX || cur > BF_OFF_MAX) return 0;
+
+    {
+        /* Sources sorted by offset, grouped into contiguous load runs; v
+         * index = position in that order, so contiguous unit stores map
+         * to contiguous v. */
+        int srcs[BF_MOVES_MAX], ns = 0, us[BF_MOVES_MAX], nu = 0, nlr = 0, nsr = 0, nfx = 0, ngs = 0;
+        int x, y;
+        for (i = 0; i < ne; i++) ldix[i] = -1;
+        for (i = 0; i < ne; i++) {
+            if (e[i].nt == 1 && e[i].src[0] == i && e[i].k[0] == 1 && e[i].b == 0) {
+                e[i].nt = -1;  /* unchanged */
+                continue;
+            }
+            for (j = 0; j < e[i].nt; j++)
+                if (ldix[e[i].src[j]] < 0) { ldix[e[i].src[j]] = 0; srcs[ns++] = e[i].src[j]; }
+            if (e[i].nt == 1 && e[i].k[0] == 1) us[nu++] = i;
+            else ngs++;
+        }
+        for (x = 1; x < ns; x++)
+            for (y = x; y > 0 && e[srcs[y - 1]].off > e[srcs[y]].off; y--) { int t = srcs[y]; srcs[y] = srcs[y - 1]; srcs[y - 1] = t; }
+        for (x = 1; x < nu; x++)
+            for (y = x; y > 0 && e[us[y - 1]].off > e[us[y]].off; y--) { int t = us[y]; us[y] = us[y - 1]; us[y - 1] = t; }
+        for (x = 0; x < ns; x++) ldix[srcs[x]] = x;
+
+        nw = 6;
+        for (x = 0; x < ns; x = y) {
+            for (y = x + 1; y < ns && e[srcs[y]].off == e[srcs[y - 1]].off + 1; y++) {}
+            w[nw++] = e[srcs[x]].off; w[nw++] = y - x; nlr++;
+        }
+        for (x = 0; x < nu; x = y) {
+            for (y = x + 1; y < nu && e[us[y]].off == e[us[y - 1]].off + 1 &&
+                            ldix[e[us[y]].src[0]] == ldix[e[us[y - 1]].src[0]] + 1; y++) {}
+            w[nw++] = e[us[x]].off; w[nw++] = ldix[e[us[x]].src[0]]; w[nw++] = y - x; nsr++;
+        }
+        for (x = 0; x < nu; x++)
+            if (e[us[x]].b) { w[nw++] = e[us[x]].off; w[nw++] = (int32_t)e[us[x]].b; nfx++; }
+        for (i = 0; i < ne; i++) {
+            if (e[i].nt < 0 || (e[i].nt == 1 && e[i].k[0] == 1)) continue;
+            w[nw++] = e[i].off; w[nw++] = (int32_t)e[i].b; w[nw++] = e[i].nt;
+            for (j = 0; j < e[i].nt; j++) {
+                w[nw++] = ldix[e[i].src[j]];
+                w[nw++] = (int32_t)e[i].k[j];
+            }
+        }
+        w[0] = (int32_t)cur; w[1] = ns; w[2] = nlr; w[3] = nsr; w[4] = nfx; w[5] = ngs;
+    }
+    return nw;
+}
+
+static uint32_t bf_moves_hashw(const int32_t *w, int nw) {
+    uint32_t h = 2166136261u;
+    int i;
+    for (i = 0; i < nw; i++) h = (h ^ (uint32_t)w[i]) * 16777619u;
+    return h;
+}
+
+static int bf_moves_len(const int32_t *w) {
+    int i, nw = 6 + 2 * w[2] + 3 * w[3] + 2 * w[4];
+    for (i = 0; i < w[5]; i++) nw += 3 + 2 * w[nw + 2];
+    return nw;
+}
+
+// Returns the 1-based pool id, or 0 when out of memory.
+static uint32_t bf_moves_intern(const int32_t *w, int nw) {
+    uint32_t h, i, id;
+    if (bf_moves_nent * 2 >= bf_moves_hcap) {
+        uint32_t ncap = bf_moves_hcap ? bf_moves_hcap * 2 : 1024, k;
+        uint32_t *nh = (uint32_t *)calloc(ncap, sizeof *nh);
+        if (!nh) return 0;
+        for (k = 0; k < bf_moves_hcap; k++) {
+            uint32_t oid = bf_moves_hash[k];
+            const int32_t *ow;
+            if (!oid) continue;
+            ow = bf_moves_pool + (oid - 1);
+            for (i = bf_moves_hashw(ow, bf_moves_len(ow)) & (ncap - 1); nh[i]; i = (i + 1) & (ncap - 1)) {}
+            nh[i] = oid;
+        }
+        free(bf_moves_hash);
+        bf_moves_hash = nh;
+        bf_moves_hcap = ncap;
+    }
+    h = bf_moves_hashw(w, nw);
+    for (i = h & (bf_moves_hcap - 1); (id = bf_moves_hash[i]) != 0; i = (i + 1) & (bf_moves_hcap - 1)) {
+        const int32_t *ow = bf_moves_pool + (id - 1);
+        if (bf_moves_len(ow) == nw && memcmp(ow, w, (size_t)nw * sizeof *w) == 0) return id;
+    }
+    if (bf_moves_npool + (uint32_t)nw > bf_moves_cap) {
+        uint32_t ncap = bf_moves_cap ? bf_moves_cap * 2 : 4096;
+        int32_t *np;
+        while (ncap < bf_moves_npool + (uint32_t)nw) ncap *= 2;
+        np = (int32_t *)realloc(bf_moves_pool, (size_t)ncap * sizeof *np);
+        if (!np) return 0;
+        bf_moves_pool = np;
+        bf_moves_cap = ncap;
+    }
+    memcpy(bf_moves_pool + bf_moves_npool, w, (size_t)nw * sizeof *w);
+    id = bf_moves_npool + 1;
+    bf_moves_npool += (uint32_t)nw;
+    bf_moves_hash[i] = id;
+    bf_moves_nent++;
+    return id;
+}
+
 static void bf_markLoopRuns(bf_op* bfo, int pc) {
     int i, j, n, c, okb;
+    int32_t mv[6 + BF_MOVES_MAX * (10 + 2 * BF_MV_TERMS)];
 #if BF_AFFINE
     bf_affine map;
 #endif
@@ -725,6 +925,12 @@ static void bf_markLoopRuns(bf_op* bfo, int pc) {
             if (id > 0) bfo[i].aux = (uint16_t)id;
         }
 #endif
+        if (!bfo[i].aux && n - 1 >= BF_MOVES_MIN_OPS) {
+            int nw = bf_moves_from_body(bfo + i + 1, n - 1, mv);
+            uint32_t id = nw > 0 ? bf_moves_intern(mv, nw) : 0;
+            bfo[i + n].aux = (uint16_t)id;
+            bfo[i + 1].aux = (uint16_t)(id >> 16);
+        }
         bfo[i].sub = (uint8_t)bf_looprun_variant(bfo + i);
     }
 }
@@ -937,6 +1143,7 @@ int bf_OptimizeRep(void** bfoptr, char* chars, const int32_t* rep, int proglen, 
 #if BF_AFFINE
     bf_affine_reset();
 #endif
+    bf_moves_reset();
     bf_nest_reset();
     bf_op* bfo = (bf_op*)calloc((size_t)(proglen + 1), sizeof(bf_op));
     int lstack[bf_MEMDEFAULT];
@@ -1074,6 +1281,7 @@ int bf_OptimizeRep(void** bfoptr, char* chars, const int32_t* rep, int proglen, 
                    naff, nrun, napp, ns1, ns2z, ns2, ns3);
         }
 #endif
+        printf("//-- Moves: %u distinct LOOPRUN gather bodies (%u words)\n", bf_moves_nent, bf_moves_npool);
 #if BF_NEST
         {
             int k, s, nn = 0, nrem = 0, nlr = 0, cnt[BF_SEG_Total] = {0};
@@ -1087,7 +1295,7 @@ int bf_OptimizeRep(void** bfoptr, char* chars, const int32_t* rep, int proglen, 
                     for (s = 0; s < m->nseg; s++) {
                         int kd = m->seg[s].kind;
                         cnt[kd]++;
-                        if (kd >= BF_SEG_LOOPRUN && kd <= BF_SEG_LOOPRUN_AFF_S3) nlr++;
+                        if (kd >= BF_SEG_LOOPRUN && kd <= BF_SEG_LOOPRUN_MOVES) nlr++;
                     }
                 }
             }

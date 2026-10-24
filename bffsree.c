@@ -195,6 +195,8 @@ int bf_looprun_variant(const bf_op* L) {
         }
     }
 #endif
+    if (bf_moves_get(bf_moves_id(L)))
+        return BF_SEG_LOOPRUN_MOVES;
     return BF_SEG_LOOPRUN;
 }
 
@@ -585,6 +587,68 @@ static BF_NOINLINE bf_cell* bf_aff_walk_s3(
 }
 #endif
 
+// Exact copy of n cells between non-overlapping buffers, as fixed-width
+// chunks; the last chunk overlaps the previous one instead of running
+// past the end.
+static inline void bf_cellcopy(bf_cell* restrict d, const bf_cell* restrict s, int n) {
+    unsigned char* D = (unsigned char*)d;
+    const unsigned char* S = (const unsigned char*)s;
+    const int nb = n * (int)sizeof(bf_cell);
+    int i;
+    if (nb >= 16) {
+        for (i = 0; i + 16 < nb; i += 16) memcpy(D + i, S + i, 16);
+        memcpy(D + nb - 16, S + nb - 16, 16);
+    } else if (nb >= 8) {
+        memcpy(D, S, 8);
+        memcpy(D + nb - 8, S + nb - 8, 8);
+    } else if (nb >= 4) {
+        memcpy(D, S, 4);
+        memcpy(D + nb - 4, S + nb - 4, 4);
+    } else {
+        for (i = 0; i < nb; i++) D[i] = S[i];
+    }
+}
+
+// Gather-form body (layout at bf_moves_get): all loads into v, then
+// all stores from v, then the hop.
+static BF_NOINLINE bf_cell* bf_looprun_moves(
+    bf_cell* p, bf_cell fbuf, int foff, const int32_t* restrict w)
+{
+    bf_cell v[BF_MOVES_MAX];
+    const int hop = w[0], nlr = w[2], nsr = w[3], nfx = w[4], ng = w[5];
+    const int32_t* restrict lr = w + 6;
+    const int32_t* restrict sr = lr + 2 * nlr;
+    const int32_t* restrict fx = sr + 3 * nsr;
+    const int32_t* restrict sg = fx + 2 * nfx;
+    int i;
+    *p += fbuf;
+    p += foff;
+    for (;;) {
+        const int32_t* g = sg;
+        bf_cell* vp = v;
+        for (i = 0; i < nlr; i++) {
+            bf_cellcopy(vp, p + lr[2 * i], lr[2 * i + 1]);
+            vp += lr[2 * i + 1];
+        }
+        for (i = 0; i < nsr; i++)
+            bf_cellcopy(p + sr[3 * i], v + sr[3 * i + 1], sr[3 * i + 2]);
+        for (i = 0; i < nfx; i++) p[fx[2 * i]] += (bf_cell)fx[2 * i + 1];
+        for (i = 0; i < ng; i++) {
+            bf_cell x = (bf_cell)g[1];
+            int t, nt = g[2];
+            for (t = 0; t < nt; t++)
+                x = (bf_cell)(x + (bf_cell)g[4 + 2 * t] * v[g[3 + 2 * t]]);
+            p[g[0]] = x;
+            g += 3 + 2 * nt;
+        }
+        p += hop;
+        if (*p == 0) break;
+        *p += fbuf;
+        p += foff;
+    }
+    return p;
+}
+
 // Run a LOOPRUN whose cell is known nonzero, by pre-decoded variant.
 // Stops at the failed loop test; the caller applies the REW slot.
 static inline bf_cell* bf_looprun_taken(bf_cell* p, bf_op* L, int variant) {
@@ -604,6 +668,8 @@ static inline bf_cell* bf_looprun_taken(bf_cell* p, bf_op* L, int variant) {
             L[2].val, L[2].buf, L[2].off,
             L[3].val, L[3].buf, L[3].off,
             L[4].val, L[4].buf, L[4].off);
+    case BF_SEG_LOOPRUN_MOVES:
+        return bf_looprun_moves(p, (bf_cell)L->buf, L->off, bf_moves_get(bf_moves_id(L)));
 #if BF_AFFINE && BF_AFFINE_APPLY
     case BF_SEG_LOOPRUN_AFF_S1:
         return bf_aff_walk_s1(p, (bf_cell)L->buf, L->off, &bf_affine_get(L->aux)->bound);
@@ -741,6 +807,7 @@ static inline bf_cell* bf_nest_seg(bf_cell* p, bf_op* L, const bf_seg* g) {
     case BF_SEG_LOOPRUN_AFF_S2Z:
     case BF_SEG_LOOPRUN_AFF_S2:
     case BF_SEG_LOOPRUN_AFF_S3:
+    case BF_SEG_LOOPRUN_MOVES:
         C = L + g->a;
         if (*p) p = bf_looprun_taken(p, C, g->kind);
         return bf_apply_rew(p, C + C->val);
